@@ -34,11 +34,19 @@ jobs:
       - name: Mypy
         run: mypy app
       - name: Pytest + coverage
+        env:
+          # Keep tests on an isolated in-memory DB even if job-level DATABASE_URL is set.
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
         run: |
           pytest --cov=app.risk --cov=app.execution --cov=app.portfolio --cov=app.strategies \
             --cov-report=term-missing --cov-fail-under=70
       - name: Alembic upgrade
-        run: alembic upgrade head
+        env:
+          # Fresh file DB dedicated to migration validation (never share with pytest).
+          DATABASE_URL: sqlite+aiosqlite:///./migrate-ci.db
+        run: |
+          rm -f migrate-ci.db
+          alembic upgrade head
 
   frontend:
     runs-on: ubuntu-latest

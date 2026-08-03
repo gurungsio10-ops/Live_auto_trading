@@ -10,11 +10,13 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Force safe defaults for all tests before Settings is cached.
+# DATABASE_URL is overwritten (not setdefault) so CI env vars cannot point
+# pytest at a shared file DB that later breaks ``alembic upgrade``.
 os.environ.setdefault("TRADING_MODE", "paper")
 os.environ.setdefault("LIVE_TRADING_ENABLED", "false")
 os.environ.setdefault("KILL_SWITCH_ENABLED", "false")
 os.environ.setdefault("EXCHANGE_ENV", "paper")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import app.auth.store
 import app.journal.store
