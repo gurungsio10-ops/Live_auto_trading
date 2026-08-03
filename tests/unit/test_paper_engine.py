@@ -8,12 +8,18 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.config import Settings
 from app.execution.gateway import OrderGateway, RiskBlockedError
 from app.execution.paper import PaperConfig, PaperTradingEngine
-from app.models.domain.enums import OrderSide, OrderStatus, OrderType, RiskDecision, RiskReasonCode
+from app.models.domain.enums import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RiskDecision,
+    RiskReasonCode,
+)
 from app.models.domain.trading import OrderRequest, PortfolioState, RiskEvaluation
 from app.risk.engine import RiskContext, RiskEngine, RiskEngineState
-from app.core.config import Settings
 
 
 def _risk_ok(qty: Decimal = Decimal("0.01")) -> RiskEvaluation:
@@ -56,7 +62,9 @@ async def test_partial_fill():
         PaperConfig(partial_fill_fraction=Decimal("0.5"), initial_cash=Decimal("10000"))
     )
     engine.set_mark_price("BTC/USDT", Decimal("100000"))
-    order = await engine.submit(_req(quantity=Decimal("0.02")), _risk_ok(Decimal("0.02")))
+    order = await engine.submit(
+        _req(quantity=Decimal("0.02")), _risk_ok(Decimal("0.02"))
+    )
     assert order.status == OrderStatus.PARTIALLY_FILLED
     assert order.filled_quantity == Decimal("0.01")
 
@@ -209,7 +217,9 @@ async def test_replay_byte_identical_output():
             )
         )
         engine.set_mark_price("BTC/USDT", Decimal("100000"))
-        await engine.submit(_req(idempotency_key="r1", quantity=Decimal("0.01")), _risk_ok())
+        await engine.submit(
+            _req(idempotency_key="r1", quantity=Decimal("0.01")), _risk_ok()
+        )
         engine.set_mark_price("BTC/USDT", Decimal("101000"))
         await engine.submit(
             _req(side=OrderSide.SELL, idempotency_key="r2", quantity=Decimal("0.01")),
@@ -217,7 +227,9 @@ async def test_replay_byte_identical_output():
         )
         snap = engine.snapshot()
         # Normalize volatile fields; sort by side for stable ordering across UUID ids
-        orders = sorted(snap["orders"].values(), key=lambda o: (o["side"], o["quantity"]))
+        orders = sorted(
+            snap["orders"].values(), key=lambda o: (o["side"], o["quantity"])
+        )
         snap["orders"] = {
             str(i): {
                 "symbol": o["symbol"],

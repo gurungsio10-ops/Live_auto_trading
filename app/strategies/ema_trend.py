@@ -75,12 +75,30 @@ class EMATrendStrategy(Strategy):
         vma = volume_ma(volumes, int(params["volume_ma_period"]))
 
         i = len(closes) - 1
-        if None in (fast[i], slow[i], r[i], a[i], vma[i], fast[i - 1], slow[i - 1]):
+        fast_cur, slow_cur = fast[i], slow[i]
+        fast_prev, slow_prev = fast[i - 1], slow[i - 1]
+        rsi_cur, atr_val, vma_cur = r[i], a[i], vma[i]
+        if None in (
+            fast_cur,
+            slow_cur,
+            rsi_cur,
+            atr_val,
+            vma_cur,
+            fast_prev,
+            slow_prev,
+        ):
             return self._hold(symbol, fp, "indicators not ready")
+        assert (
+            fast_cur is not None
+            and slow_cur is not None
+            and rsi_cur is not None
+            and atr_val is not None
+            and vma_cur is not None
+            and fast_prev is not None
+            and slow_prev is not None
+        )
 
         price = closes[i]
-        atr_val = a[i]
-        assert atr_val is not None and fast[i] is not None and slow[i] is not None
         stop_mult = Decimal(str(params["stop_atr_multiple"]))
         target_mult = Decimal(str(params["target_atr_multiple"]))
         stop = price - atr_val * stop_mult
@@ -89,19 +107,25 @@ class EMATrendStrategy(Strategy):
         # Exit rules when in a position
         if context.position is not None and context.position.quantity > 0:
             bars_held = int(context.indicators.get("bars_held", 0))
-            cross_under = fast[i - 1] >= slow[i - 1] and fast[i] < slow[i]
-            hit_stop = context.position.stop_loss is not None and price <= context.position.stop_loss
-            hit_target = context.position.take_profit is not None and price >= context.position.take_profit
+            cross_under = fast_prev >= slow_prev and fast_cur < slow_cur
+            hit_stop = (
+                context.position.stop_loss is not None
+                and price <= context.position.stop_loss
+            )
+            hit_target = (
+                context.position.take_profit is not None
+                and price >= context.position.take_profit
+            )
             max_hold = bars_held >= int(params["max_holding_bars"])
             if cross_under or hit_stop or hit_target or max_hold:
                 reason = (
                     "ema cross-under"
                     if cross_under
-                    else "stop-loss"
-                    if hit_stop
-                    else "take-profit"
-                    if hit_target
-                    else "max holding period"
+                    else (
+                        "stop-loss"
+                        if hit_stop
+                        else "take-profit" if hit_target else "max holding period"
+                    )
                 )
                 return TradeSignal(
                     strategy_name=self.name,
@@ -124,10 +148,10 @@ class EMATrendStrategy(Strategy):
         rsi_min = Decimal(str(params["rsi_min"]))
         rsi_max = Decimal(str(params["rsi_max"]))
         min_atr = Decimal(str(params["min_atr"]))
-        trend_up = fast[i] > slow[i] and price > slow[i]
-        rsi_ok = rsi_min <= r[i] <= rsi_max
+        trend_up = fast_cur > slow_cur and price > slow_cur
+        rsi_ok = rsi_min <= rsi_cur <= rsi_max
         atr_ok = atr_val >= min_atr
-        vol_ok = volumes[i] > vma[i]
+        vol_ok = volumes[i] > vma_cur
 
         if trend_up and rsi_ok and atr_ok and vol_ok:
             return TradeSignal(

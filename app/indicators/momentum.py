@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Sequence
 
 from app.indicators.base import InsufficientDataError, to_decimals
 from app.indicators.moving_averages import ema
 
 
-def rsi(values: Sequence[Decimal | int | float | str], period: int = 14) -> list[Decimal | None]:
+def rsi(
+    values: Sequence[Decimal | int | float | str], period: int = 14
+) -> list[Decimal | None]:
     data = to_decimals(values)
     if not data:
         raise InsufficientDataError("rsi received empty input")
@@ -87,6 +89,7 @@ def macd(
     for offset, sig in enumerate(signal_vals):
         idx = first_valid + offset
         signal_line[idx] = sig
-        if sig is not None and macd_line[idx] is not None:
-            hist[idx] = macd_line[idx] - sig
+        macd_v = macd_line[idx]
+        if sig is not None and macd_v is not None:
+            hist[idx] = macd_v - sig
     return MACDResult(macd=macd_line, signal=signal_line, histogram=hist)

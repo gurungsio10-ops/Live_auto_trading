@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
-from typing import Sequence
 
-from app.indicators.base import InsufficientDataError, ensure_length, sma_at, to_decimals
+from app.indicators.base import (
+    InsufficientDataError,
+    ensure_length,
+    sma_at,
+    to_decimals,
+)
 
 
-def sma(values: Sequence[Decimal | int | float | str], period: int) -> list[Decimal | None]:
+def sma(
+    values: Sequence[Decimal | int | float | str], period: int
+) -> list[Decimal | None]:
     data = to_decimals(values)
     if not data:
         raise InsufficientDataError("sma received empty input")
@@ -18,7 +25,9 @@ def sma(values: Sequence[Decimal | int | float | str], period: int) -> list[Deci
     return [sma_at(data, period, i) for i in range(len(data))]
 
 
-def ema(values: Sequence[Decimal | int | float | str], period: int) -> list[Decimal | None]:
+def ema(
+    values: Sequence[Decimal | int | float | str], period: int
+) -> list[Decimal | None]:
     data = to_decimals(values)
     if not data:
         raise InsufficientDataError("ema received empty input")

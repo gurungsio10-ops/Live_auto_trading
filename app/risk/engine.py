@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -61,10 +61,14 @@ class RiskEngine:
         checks: dict[str, Any] = {}
 
         if not self.state.risk_engine_healthy:
-            return self._halt(RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk engine unhealthy", checks)
+            return self._halt(
+                RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk engine unhealthy", checks
+            )
 
         if self.settings.kill_switch_enabled or context.kill_switch_enabled:
-            return self._halt(RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks)
+            return self._halt(
+                RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks
+            )
 
         if self.state.circuit_breaker_open:
             return self._halt(
@@ -79,14 +83,20 @@ class RiskEngine:
                 return live_eval
 
         if not self.state.market_data_healthy:
-            return self._reject(RiskReasonCode.MARKET_DATA_UNHEALTHY, "Market data unhealthy", checks)
+            return self._reject(
+                RiskReasonCode.MARKET_DATA_UNHEALTHY, "Market data unhealthy", checks
+            )
 
         if not self.state.database_healthy:
-            return self._reject(RiskReasonCode.DATABASE_UNHEALTHY, "Database unhealthy", checks)
+            return self._reject(
+                RiskReasonCode.DATABASE_UNHEALTHY, "Database unhealthy", checks
+            )
 
         if not self.state.reconciliation_healthy:
             return self._reject(
-                RiskReasonCode.RECONCILIATION_UNHEALTHY, "Reconciliation unhealthy", checks
+                RiskReasonCode.RECONCILIATION_UNHEALTHY,
+                "Reconciliation unhealthy",
+                checks,
             )
 
         # Stale data
@@ -96,21 +106,31 @@ class RiskEngine:
             stale_after = timedelta(seconds=self.settings.market_data_stale_seconds)
             checks["market_data_age_seconds"] = age.total_seconds()
             if age > stale_after:
-                return self._reject(RiskReasonCode.DATA_STALE, "Market data stale", checks)
+                return self._reject(
+                    RiskReasonCode.DATA_STALE, "Market data stale", checks
+                )
 
         # Duplicate idempotency
         if request.idempotency_key in self.state.seen_idempotency_keys:
-            return self._reject(RiskReasonCode.DUPLICATE_ORDER, "Duplicate idempotency key", checks)
+            return self._reject(
+                RiskReasonCode.DUPLICATE_ORDER, "Duplicate idempotency key", checks
+            )
 
         # Price / quantity validity
         if request.quantity <= 0:
-            return self._reject(RiskReasonCode.INVALID_QUANTITY, "Quantity must be > 0", checks)
+            return self._reject(
+                RiskReasonCode.INVALID_QUANTITY, "Quantity must be > 0", checks
+            )
         if request.order_type == OrderType.LIMIT:
             if request.price is None or request.price <= 0:
-                return self._reject(RiskReasonCode.INVALID_PRICE, "Limit price required", checks)
+                return self._reject(
+                    RiskReasonCode.INVALID_PRICE, "Limit price required", checks
+                )
         mark = context.mark_price
         if mark is not None and mark <= 0:
-            return self._reject(RiskReasonCode.INVALID_PRICE, "Mark price invalid", checks)
+            return self._reject(
+                RiskReasonCode.INVALID_PRICE, "Mark price invalid", checks
+            )
 
         price = request.price if request.price is not None else mark
         if price is None or price <= 0:
@@ -125,14 +145,20 @@ class RiskEngine:
                 quantized = (qty / step).to_integral_value(rounding=ROUND_DOWN) * step
                 if quantized != qty:
                     return self._reject(
-                        RiskReasonCode.PRECISION_INVALID, "Quantity precision invalid", checks
+                        RiskReasonCode.PRECISION_INVALID,
+                        "Quantity precision invalid",
+                        checks,
                     )
             if qty < info.min_quantity:
-                return self._reject(RiskReasonCode.MIN_ORDER_SIZE, "Below min quantity", checks)
+                return self._reject(
+                    RiskReasonCode.MIN_ORDER_SIZE, "Below min quantity", checks
+                )
             notional = qty * price
             min_notional = max(info.min_notional, self.settings.min_order_notional)
             if notional < min_notional:
-                return self._reject(RiskReasonCode.MIN_ORDER_SIZE, "Below min notional", checks)
+                return self._reject(
+                    RiskReasonCode.MIN_ORDER_SIZE, "Below min notional", checks
+                )
             if info.tick_size > 0 and request.price is not None:
                 ticks = request.price / info.tick_size
                 if ticks != ticks.to_integral_value():
@@ -142,7 +168,9 @@ class RiskEngine:
         else:
             notional = qty * price
             if notional < self.settings.min_order_notional:
-                return self._reject(RiskReasonCode.MIN_ORDER_SIZE, "Below min notional", checks)
+                return self._reject(
+                    RiskReasonCode.MIN_ORDER_SIZE, "Below min notional", checks
+                )
 
         # Order frequency
         now = utc_now()
@@ -182,7 +210,8 @@ class RiskEngine:
         open_positions = len(portfolio.open_positions)
         checks["open_positions"] = open_positions
         reducing = request.reduce_only or any(
-            p.symbol == request.symbol and p.quantity > 0 for p in portfolio.open_positions
+            p.symbol == request.symbol and p.quantity > 0
+            for p in portfolio.open_positions
         )
         if not reducing and open_positions >= self.settings.max_open_positions:
             return self._reject(
@@ -193,10 +222,18 @@ class RiskEngine:
         equity = portfolio.equity if portfolio.equity > 0 else portfolio.cash_balance
         position_notional = qty * price
         position_exposure = position_notional / equity if equity > 0 else Decimal("1")
-        existing_exposure = sum(
-            (p.quantity * (context.mark_price or p.current_price) for p in portfolio.open_positions),
-            Decimal("0"),
-        ) / equity if equity > 0 else Decimal("0")
+        existing_exposure = (
+            sum(
+                (
+                    p.quantity * (context.mark_price or p.current_price)
+                    for p in portfolio.open_positions
+                ),
+                Decimal("0"),
+            )
+            / equity
+            if equity > 0
+            else Decimal("0")
+        )
         portfolio_exposure = existing_exposure + position_exposure
         checks["position_exposure"] = str(position_exposure)
         checks["portfolio_exposure"] = str(portfolio_exposure)
@@ -215,16 +252,19 @@ class RiskEngine:
                 )
                 if max_qty_by_risk <= 0:
                     return self._reject(
-                        RiskReasonCode.MAX_RISK_PER_TRADE, "Risk per trade too high", checks
+                        RiskReasonCode.MAX_RISK_PER_TRADE,
+                        "Risk per trade too high",
+                        checks,
                     )
                 if max_qty_by_risk < approved_qty:
                     approved_qty = max_qty_by_risk
                     decision = RiskDecision.REDUCED
                     reason = RiskReasonCode.SIZE_REDUCED_BY_RISK
         else:
-            max_notional = risk_budget / self.settings.max_risk_per_trade * self.settings.max_risk_per_trade
             # fixed-fractional: cap notional at max_risk_per_trade * equity / assumed 100% stop
-            max_qty_ff = (risk_budget / price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            max_qty_ff = (risk_budget / price).quantize(
+                Decimal("0.00000001"), rounding=ROUND_DOWN
+            )
             if max_qty_ff < approved_qty:
                 approved_qty = max_qty_ff
                 decision = RiskDecision.REDUCED
@@ -232,10 +272,14 @@ class RiskEngine:
 
         max_pos_notional = equity * self.settings.max_position_exposure
         if approved_qty * price > max_pos_notional:
-            reduced = (max_pos_notional / price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            reduced = (max_pos_notional / price).quantize(
+                Decimal("0.00000001"), rounding=ROUND_DOWN
+            )
             if reduced <= 0:
                 return self._reject(
-                    RiskReasonCode.MAX_POSITION_EXPOSURE, "Position exposure too high", checks
+                    RiskReasonCode.MAX_POSITION_EXPOSURE,
+                    "Position exposure too high",
+                    checks,
                 )
             approved_qty = reduced
             decision = RiskDecision.REDUCED
@@ -243,26 +287,37 @@ class RiskEngine:
 
         max_port_notional = equity * self.settings.max_portfolio_exposure
         current_notional = sum(
-            (p.quantity * (context.mark_price or p.current_price) for p in portfolio.open_positions),
+            (
+                p.quantity * (context.mark_price or p.current_price)
+                for p in portfolio.open_positions
+            ),
             Decimal("0"),
         )
         if current_notional + approved_qty * price > max_port_notional:
             room = max_port_notional - current_notional
             if room <= 0:
                 return self._reject(
-                    RiskReasonCode.MAX_PORTFOLIO_EXPOSURE, "Portfolio exposure too high", checks
+                    RiskReasonCode.MAX_PORTFOLIO_EXPOSURE,
+                    "Portfolio exposure too high",
+                    checks,
                 )
-            reduced = (room / price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            reduced = (room / price).quantize(
+                Decimal("0.00000001"), rounding=ROUND_DOWN
+            )
             if reduced <= 0:
                 return self._reject(
-                    RiskReasonCode.MAX_PORTFOLIO_EXPOSURE, "Portfolio exposure too high", checks
+                    RiskReasonCode.MAX_PORTFOLIO_EXPOSURE,
+                    "Portfolio exposure too high",
+                    checks,
                 )
             approved_qty = reduced
             decision = RiskDecision.REDUCED
             reason = RiskReasonCode.SIZE_REDUCED_BY_RISK
 
         if approved_qty <= 0:
-            return self._reject(RiskReasonCode.INVALID_QUANTITY, "Approved qty is zero", checks)
+            return self._reject(
+                RiskReasonCode.INVALID_QUANTITY, "Approved qty is zero", checks
+            )
 
         # Record acceptance bookkeeping
         self.state.seen_idempotency_keys.add(request.idempotency_key)
@@ -272,7 +327,11 @@ class RiskEngine:
             decision=decision,
             reason_code=reason,
             approved_quantity=approved_qty,
-            message="OK" if decision == RiskDecision.APPROVED else "Size reduced by risk limits",
+            message=(
+                "OK"
+                if decision == RiskDecision.APPROVED
+                else "Size reduced by risk limits"
+            ),
             checks=checks,
         )
 
@@ -293,28 +352,46 @@ class RiskEngine:
                 RiskReasonCode.LIVE_TRADING_DISABLED, "Live trading disabled", checks
             )
         if context.kill_switch_enabled or self.settings.kill_switch_enabled:
-            return self._halt(RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks)
-        if not (context.has_exchange_credentials or self.settings.has_exchange_credentials):
-            return self._reject(RiskReasonCode.INVALID_CREDENTIALS, "Missing credentials", checks)
+            return self._halt(
+                RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks
+            )
+        if not (
+            context.has_exchange_credentials or self.settings.has_exchange_credentials
+        ):
+            return self._reject(
+                RiskReasonCode.INVALID_CREDENTIALS, "Missing credentials", checks
+            )
         if not self.state.risk_engine_healthy:
-            return self._reject(RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk unhealthy", checks)
+            return self._reject(
+                RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk unhealthy", checks
+            )
         if not self.state.market_data_healthy:
-            return self._reject(RiskReasonCode.MARKET_DATA_UNHEALTHY, "MD unhealthy", checks)
+            return self._reject(
+                RiskReasonCode.MARKET_DATA_UNHEALTHY, "MD unhealthy", checks
+            )
         if not self.state.database_healthy:
-            return self._reject(RiskReasonCode.DATABASE_UNHEALTHY, "DB unhealthy", checks)
+            return self._reject(
+                RiskReasonCode.DATABASE_UNHEALTHY, "DB unhealthy", checks
+            )
         if not self.state.reconciliation_healthy:
             return self._reject(
-                RiskReasonCode.RECONCILIATION_UNHEALTHY, "Reconciliation unhealthy", checks
+                RiskReasonCode.RECONCILIATION_UNHEALTHY,
+                "Reconciliation unhealthy",
+                checks,
             )
         if not context.live_approval_valid:
             return self._reject(
-                RiskReasonCode.INVALID_LIVE_APPROVAL, "Live approval token invalid", checks
+                RiskReasonCode.INVALID_LIVE_APPROVAL,
+                "Live approval token invalid",
+                checks,
             )
         checks["live_gating"] = "passed"
         return None
 
     @staticmethod
-    def _reject(code: RiskReasonCode, message: str, checks: dict[str, Any]) -> RiskEvaluation:
+    def _reject(
+        code: RiskReasonCode, message: str, checks: dict[str, Any]
+    ) -> RiskEvaluation:
         return RiskEvaluation(
             decision=RiskDecision.REJECTED,
             reason_code=code,
@@ -324,7 +401,9 @@ class RiskEngine:
         )
 
     @staticmethod
-    def _halt(code: RiskReasonCode, message: str, checks: dict[str, Any]) -> RiskEvaluation:
+    def _halt(
+        code: RiskReasonCode, message: str, checks: dict[str, Any]
+    ) -> RiskEvaluation:
         return RiskEvaluation(
             decision=RiskDecision.HALTED,
             reason_code=code,

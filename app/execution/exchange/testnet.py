@@ -57,7 +57,9 @@ class ExchangeTestnetClient:
             )
 
         now = utc_now()
-        self._order_times = [t for t in self._order_times if (now - t).total_seconds() < 60]
+        self._order_times = [
+            t for t in self._order_times if (now - t).total_seconds() < 60
+        ]
         if len(self._order_times) >= self.config.rate_limit_per_minute:
             return Order(
                 id=uuid4().hex,
@@ -98,7 +100,9 @@ class ExchangeTestnetClient:
             quantity=request.quantity,
             filled_quantity=filled,
             price=request.price,
-            average_fill_price=Decimal(str(raw["average"])) if raw.get("average") else None,
+            average_fill_price=(
+                Decimal(str(raw["average"])) if raw.get("average") else None
+            ),
             status=status,
             risk_decision=risk.decision,
             risk_reason_code=risk.reason_code,

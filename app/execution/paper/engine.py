@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 from uuid import uuid4
 
 from app.core.time import utc_now
 from app.models.domain.enums import OrderSide, OrderStatus, OrderType, RiskDecision
-from app.models.domain.trading import Fill, Order, OrderRequest, Position, RiskEvaluation
+from app.models.domain.trading import (
+    Fill,
+    Order,
+    OrderRequest,
+    Position,
+    RiskEvaluation,
+)
 
 
 @dataclass
@@ -88,10 +92,16 @@ class PaperTradingEngine:
         order = self._update(order, status=OrderStatus.SUBMITTED, risk=risk)
 
         mark = self.config.mark_prices.get(request.symbol)
-        if mark is None and request.order_type == OrderType.LIMIT and request.price is not None:
+        if (
+            mark is None
+            and request.order_type == OrderType.LIMIT
+            and request.price is not None
+        ):
             mark = request.price
         if mark is None:
-            return self._update(order, status=OrderStatus.FAILED, risk=risk, extra={"error": "no mark"})
+            return self._update(
+                order, status=OrderStatus.FAILED, risk=risk, extra={"error": "no mark"}
+            )
 
         if request.order_type == OrderType.LIMIT and request.price is not None:
             # Fill limit only if market crosses
@@ -134,14 +144,19 @@ class PaperTradingEngine:
         if order.side == OrderSide.BUY:
             cost = price * qty + fee
             if cost > self.state.cash:
-                return self._update(order, status=OrderStatus.FAILED, risk=risk, extra={"error": "insufficient"})
+                return self._update(
+                    order,
+                    status=OrderStatus.FAILED,
+                    risk=risk,
+                    extra={"error": "insufficient"},
+                )
             self.state.cash -= cost
             existing = self.state.positions.get(order.symbol)
             if existing:
                 new_qty = existing.quantity + qty
                 new_entry = (
-                    (existing.entry_price * existing.quantity + price * qty) / new_qty
-                )
+                    existing.entry_price * existing.quantity + price * qty
+                ) / new_qty
                 self.state.positions[order.symbol] = existing.model_copy(
                     update={
                         "quantity": new_qty,
@@ -163,7 +178,12 @@ class PaperTradingEngine:
         else:
             existing = self.state.positions.get(order.symbol)
             if existing is None or existing.quantity < qty:
-                return self._update(order, status=OrderStatus.FAILED, risk=risk, extra={"error": "no position"})
+                return self._update(
+                    order,
+                    status=OrderStatus.FAILED,
+                    risk=risk,
+                    extra={"error": "no position"},
+                )
             proceeds = price * qty - fee
             self.state.cash += proceeds
             realized = (price - existing.entry_price) * qty - fee
@@ -182,8 +202,13 @@ class PaperTradingEngine:
                 )
 
         filled = order.filled_quantity + qty
-        avg = price if order.average_fill_price is None else (
-            (order.average_fill_price * order.filled_quantity + price * qty) / filled
+        avg = (
+            price
+            if order.average_fill_price is None
+            else (
+                (order.average_fill_price * order.filled_quantity + price * qty)
+                / filled
+            )
         )
         return order.model_copy(
             update={
@@ -241,7 +266,8 @@ class PaperTradingEngine:
                 k: v.model_dump(mode="json") for k, v in self.state.positions.items()
             },
             "orders": {
-                k: v.model_dump(mode="json") for k, v in sorted(self.state.orders.items())
+                k: v.model_dump(mode="json")
+                for k, v in sorted(self.state.orders.items())
             },
             "fills": [f.model_dump(mode="json") for f in self.state.fills],
             "journal_events": [j["event"] for j in self.state.journal],
@@ -249,4 +275,6 @@ class PaperTradingEngine:
 
     def export_journal_bytes(self) -> bytes:
         # Deterministic JSON for replay comparison (strip volatile ids/timestamps in caller if needed)
-        return json.dumps(self.snapshot(), sort_keys=True, separators=(",", ":")).encode()
+        return json.dumps(
+            self.snapshot(), sort_keys=True, separators=(",", ":")
+        ).encode()

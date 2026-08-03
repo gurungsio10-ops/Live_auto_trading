@@ -43,7 +43,9 @@ class CandleValidationError(ValueError):
         super().__init__(f"Candle validation failed: {[i.code for i in result.issues]}")
 
 
-def validate_ohlc_sanity(candle: Candle, *, index: int | None = None) -> list[ValidationIssue]:
+def validate_ohlc_sanity(
+    candle: Candle, *, index: int | None = None
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if candle.low > candle.open or candle.low > candle.close:
         issues.append(
@@ -51,7 +53,9 @@ def validate_ohlc_sanity(candle: Candle, *, index: int | None = None) -> list[Va
         )
     if candle.high < candle.open or candle.high < candle.close:
         issues.append(
-            ValidationIssue("OHLC_HIGH_INVALID", "high must be >= open and close", index)
+            ValidationIssue(
+                "OHLC_HIGH_INVALID", "high must be >= open and close", index
+            )
         )
     if candle.high < candle.low:
         issues.append(ValidationIssue("OHLC_HIGH_LT_LOW", "high must be >= low", index))
@@ -73,13 +77,17 @@ def validate_candles(
     missing: list = []
 
     if not candles:
-        result = ValidationResult(ok=True, issues=[], missing_timestamps=[], duplicate_timestamps=[])
+        result = ValidationResult(
+            ok=True, issues=[], missing_timestamps=[], duplicate_timestamps=[]
+        )
         return result
 
     tf = timeframe or candles[0].timeframe
     delta = TIMEFRAME_DELTAS.get(tf)
     if delta is None:
-        issues.append(ValidationIssue("UNSUPPORTED_TIMEFRAME", f"Unknown timeframe: {tf}"))
+        issues.append(
+            ValidationIssue("UNSUPPORTED_TIMEFRAME", f"Unknown timeframe: {tf}")
+        )
 
     seen: dict = {}
     sorted_candles = sorted(candles, key=lambda c: ensure_utc(c.open_time))
@@ -90,7 +98,9 @@ def validate_candles(
         if ts in seen:
             duplicates.append(ts)
             issues.append(
-                ValidationIssue("DUPLICATE_CANDLE", f"Duplicate open_time {ts.isoformat()}", idx)
+                ValidationIssue(
+                    "DUPLICATE_CANDLE", f"Duplicate open_time {ts.isoformat()}", idx
+                )
             )
         seen[ts] = idx
 

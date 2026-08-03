@@ -16,13 +16,19 @@ os.environ.setdefault("KILL_SWITCH_ENABLED", "false")
 os.environ.setdefault("EXCHANGE_ENV", "paper")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
+import app.journal.store
+import app.models.database.market  # noqa: F401
 from app.core.config import get_settings
+from app.core.time import from_unix_ms
 from app.db.base import Base
 from app.models.domain.market import Candle
+<<<<<<< HEAD
 from app.core.time import from_unix_ms
 import app.models.database.market  # noqa: F401
 import app.journal.store  # noqa: F401 — register journal ORM tables
 import app.auth.store  # noqa: F401 — register users ORM table
+=======
+>>>>>>> origin/main
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +43,9 @@ async def db_session() -> AsyncSession:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    session_factory = async_sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
     async with session_factory() as session:
         yield session
     await engine.dispose()

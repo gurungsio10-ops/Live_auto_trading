@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Sequence
 
 from app.indicators.base import InsufficientDataError, to_decimals
 from app.indicators.moving_averages import sma

@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Awaitable, Callable, Deque
+from typing import Any
 
 from app.core.config import get_settings
 from app.core.time import ensure_utc, from_unix_ms, utc_now
@@ -47,7 +48,7 @@ class WebSocketMarketDataClient:
 
     subscriptions: set[str] = field(default_factory=set)
     metrics: ConnectionMetrics = field(default_factory=ConnectionMetrics)
-    _seen_ids: Deque[str] = field(default_factory=lambda: deque(maxlen=10_000))
+    _seen_ids: deque[str] = field(default_factory=lambda: deque(maxlen=10_000))
     _last_seq: int | None = None
     _running: bool = False
     _task: asyncio.Task | None = None
@@ -88,12 +89,16 @@ class WebSocketMarketDataClient:
     async def unsubscribe(self, symbol: str) -> None:
         self.subscriptions.discard(symbol)
         if self.metrics.connected and self.transport is not None:
-            await self.transport.send(json.dumps({"op": "unsubscribe", "symbol": symbol}))
+            await self.transport.send(
+                json.dumps({"op": "unsubscribe", "symbol": symbol})
+            )
 
     async def _run_loop(self) -> None:
         while self._running:
             try:
-                await with_exponential_backoff(self._connect_and_consume, max_attempts=5, base_delay=0.05, jitter=0)
+                await with_exponential_backoff(
+                    self._connect_and_consume, max_attempts=5, base_delay=0.05, jitter=0
+                )
             except Exception:
                 self.metrics.disconnects += 1
                 self.metrics.connected = False

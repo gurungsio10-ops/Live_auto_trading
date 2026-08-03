@@ -17,8 +17,8 @@ from tests.conftest import make_candle
 
 def test_ohlc_sanity_detects_bad_high():
     # Bypass Candle model validator by constructing via model_construct
-    from app.models.domain.market import Candle
     from app.core.time import from_unix_ms
+    from app.models.domain.market import Candle
 
     bad = Candle.model_construct(
         symbol="BTC/USDT",

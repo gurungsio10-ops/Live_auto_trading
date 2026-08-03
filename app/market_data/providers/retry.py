@@ -27,7 +27,7 @@ async def with_exponential_backoff(
     for attempt in range(1, max_attempts + 1):
         try:
             return await fn()
-        except retry_exceptions as exc:  # noqa: PERF203 — intentional retry loop
+        except retry_exceptions as exc:
             last_exc = exc
             if attempt >= max_attempts:
                 break
