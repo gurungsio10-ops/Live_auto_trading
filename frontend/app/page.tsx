@@ -21,7 +21,10 @@ export default function OverviewPage() {
   const equity = useAsyncData<EquityPoint[]>("/api/equity-curve");
   const [pausePending, setPausePending] = useState(false);
   const [exportPending, setExportPending] = useState(false);
+  const [cyclePending, setCyclePending] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [lastCycle, setLastCycle] = useState<Record<string, unknown> | null>(null);
 
   async function togglePause() {
     if (portfolio.status !== "success") return;
@@ -62,6 +65,52 @@ export default function OverviewPage() {
     }
   }
 
+  async function runPaperCycle() {
+    setCyclePending(true);
+    setActionMsg(null);
+    try {
+      const res = await api.post<Record<string, unknown>>("/api/paper/cycle", {});
+      if (res.meta?.backend_error) {
+        setActionMsg(res.meta.backend_error);
+        return;
+      }
+      setLastCycle(res.data);
+      const direction = String(res.data?.signal_direction ?? "hold");
+      const order = res.data?.order_id ? ` order=${res.data.order_id}` : "";
+      setActionMsg(`Paper cycle: ${direction}${order} (simulated — not live money)`);
+      await Promise.all([portfolio.reload(), equity.reload()]);
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : "Paper cycle failed");
+    } finally {
+      setCyclePending(false);
+    }
+  }
+
+  async function resetPaperAccount() {
+    const ok = window.confirm(
+      "Reset the PAPER account to the starting balance?\n\nThis clears simulated positions, orders, and session state.\nType confirmation is enforced server-side.",
+    );
+    if (!ok) return;
+    setResetPending(true);
+    setActionMsg(null);
+    try {
+      const res = await api.post<Record<string, unknown>>("/api/paper/reset", {
+        confirm: "RESET_PAPER_ACCOUNT",
+      });
+      if (res.meta?.backend_error) {
+        setActionMsg(res.meta.backend_error);
+        return;
+      }
+      setLastCycle(null);
+      setActionMsg("Paper account reset (simulated)");
+      await Promise.all([portfolio.reload(), equity.reload()]);
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : "Paper reset failed");
+    } finally {
+      setResetPending(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -74,6 +123,14 @@ export default function OverviewPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={cyclePending}
+            onClick={runPaperCycle}
+          >
+            {cyclePending ? "Running…" : "Run one paper cycle"}
+          </Button>
           <Button
             type="button"
             variant="warn"
@@ -94,6 +151,14 @@ export default function OverviewPage() {
           >
             {exportPending ? "Exporting…" : "Export journal"}
           </Button>
+          <Button
+            type="button"
+            variant="danger"
+            disabled={resetPending}
+            onClick={resetPaperAccount}
+          >
+            {resetPending ? "Resetting…" : "Reset paper account"}
+          </Button>
         </div>
       </div>
 
@@ -112,6 +177,9 @@ export default function OverviewPage() {
       {portfolio.status === "success" && (
         <>
           <TradingModeIndicator mode={portfolio.data.trading_mode} />
+          <p className="text-[11px] font-mono text-terminal-dim">
+            PAPER MODE — all fills are simulated. Results do not guarantee future performance.
+          </p>
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
             <Card title="Portfolio summary" subtitle="Balance, equity, and P&L stack">
               <PortfolioSummary data={portfolio.data} />
@@ -123,6 +191,43 @@ export default function OverviewPage() {
               }
             />
           </div>
+          {lastCycle && (
+            <Card
+              title="Latest paper cycle"
+              subtitle="EMA crossover → risk → paper fill (simulated)"
+            >
+              <dl className="grid gap-2 text-[11px] font-mono sm:grid-cols-2">
+                <div>
+                  <dt className="text-terminal-dim">Signal</dt>
+                  <dd>{String(lastCycle.signal_direction)}</dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">Reason</dt>
+                  <dd>{String(lastCycle.signal_reason ?? "—")}</dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">Risk</dt>
+                  <dd>
+                    {String(lastCycle.risk_decision ?? "—")}{" "}
+                    {lastCycle.risk_reason_code
+                      ? `(${String(lastCycle.risk_reason_code)})`
+                      : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">Order</dt>
+                  <dd>
+                    {String(lastCycle.order_id ?? "none")}{" "}
+                    {lastCycle.order_status ? `[${String(lastCycle.order_status)}]` : ""}
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-terminal-dim">EMA indicators</dt>
+                  <dd>{JSON.stringify(lastCycle.indicators ?? {})}</dd>
+                </div>
+              </dl>
+            </Card>
+          )}
         </>
       )}
 

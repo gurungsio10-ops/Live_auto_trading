@@ -37,7 +37,8 @@ All nine conditions must be true simultaneously for a live order to submit:
 | 13.5 | Testnet Execution | **partial** | Phase 13 |
 | 14 | Live Trading Preparation | **done** (gates prepared; no live backend wired) | Phase 13.5 |
 | 15 | Futures and Leverage | **done** (primitives; enable only after live-spot soak) | Phase 14 |
-| 16 | Full audit and end-to-end paper-trading validation | **in progress** | Phase 15 |
+| 16 | Full audit and end-to-end paper-trading validation | **done** (paper slice) | Phase 15 |
+| 17 | Paper vertical slice hardening (`/api/v1`, EMA 9/21, CI) | **done** (paper only) | Phase 16 |
 
 ## Truthful status corrections (Phase 16 audit)
 
@@ -58,16 +59,15 @@ Statuses were revised to match the actual implementation (see
 
 ## Phase 16 acceptance criteria — current state
 
-Met: backend installs; `pytest` green (143); migrations apply to a clean DB;
-offline replay test passes; public-data paper-run starts/shuts down cleanly (and,
-against a reachable public exchange, completes a paper trade); ≥1 deterministic
-replayed trade completes; every actionable order has a persisted risk approval;
-duplicate events do not duplicate trades; kill switch blocks all order creation;
-live execution unreachable; no secrets in logs/commits; frontend build passes.
+Met: backend installs; `pytest` green; migrations `0001..0004` apply; offline
+replay + `/api/v1/paper/cycle/run` complete risk-gated paper fills; idempotent
+cycle keys; kill switch + admin token; live execution raises
+`LiveTradingDisabledError`; CI workflow present; frontend lint/typecheck/build;
+docs under `docs/architecture/` and `docs/operations/`.
 
-Open (why Phase 16 is **in progress**, not done): repo-wide `ruff` / `ruff format`
-/ `mypy` clean-up on legacy modules; Docker packaging (`docker compose config`);
-frontend ESLint config + tests; reconciling the legacy `/api/*` placeholder surface.
+Still open (not live-ready): live order adapter, WS Binance adapter, durable
+portfolio sync on every dashboard tick, reconciling legacy `/api/*` placeholders,
+testnet soak. Live readiness checklist remains **unchecked**.
 
 ## Notes
 

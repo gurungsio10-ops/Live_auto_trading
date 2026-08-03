@@ -33,6 +33,26 @@ class Candle(BaseModel):
             return None
         return ensure_utc(value)
 
+    @field_validator("open", "high", "low", "close", "volume", mode="before")
+    @classmethod
+    def _finite_decimal(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("price/volume required")
+        try:
+            d = Decimal(str(value))
+        except Exception as exc:
+            raise ValueError("invalid decimal") from exc
+        if not d.is_finite():
+            raise ValueError("NaN/Infinity not allowed")
+        return d
+
+    @field_validator("open", "high", "low", "close")
+    @classmethod
+    def _positive_price(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("price must be > 0")
+        return value
+
     @model_validator(mode="after")
     def _ohlc_sanity(self) -> Candle:
         if self.low > self.open or self.low > self.close:

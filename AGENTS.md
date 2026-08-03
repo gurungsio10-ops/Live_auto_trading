@@ -20,8 +20,10 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 
 ### Test / lint
 
-- Backend tests: `pytest -q` (122 tests pass). Backend lint: `ruff check .` — note the repo currently has many pre-existing ruff findings and no ruff config; the linter runs, but treat those findings as the repo's existing state, not setup breakage.
-- Frontend: `next lint` interactively prompts to configure ESLint (not set up in this repo). For a non-interactive static check use `npx tsc --noEmit` inside `frontend/` (passes clean). `npm --prefix frontend run build` also type-checks.
+- Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
+- Frontend: `npm --prefix frontend run lint`, `npm run typecheck`, `npm run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`).
+- Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
+- Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
 
 ### Live dashboard data & the demo fallback
 

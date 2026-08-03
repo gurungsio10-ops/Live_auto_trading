@@ -1,114 +1,148 @@
 # Project Atlas
 
-Gated paper/live crypto trading system. **Paper mode is the default.** Live
-trading requires every condition in `docs/architecture/roadmap.md` simultaneously.
+Safe, deterministic, personal cryptocurrency **paper** trading platform.
 
-## Quick start
+**Paper mode is the default.** Live money trading is not implemented. AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py`).
+
+## Architecture summary
+
+```text
+Market data → candle validation → EMA strategy → signal → risk engine
+  → paper broker → fill → portfolio (WAC) → journal → /api/v1 → dashboard
+```
+
+Key packages: `app/market_data`, `app/strategies`, `app/risk`, `app/execution`, `app/services` (orchestrator + paper cycle), `app/journal`, `app/api`, `frontend/`.
+
+Docs:
+
+- `docs/architecture/current_state_audit.md`
+- `docs/architecture/paper_trading_flow.md`
+- `docs/architecture/risk_controls.md`
+- `docs/architecture/database_schema.md`
+- `docs/operations/runbook.md`
+- `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
+
+## Local setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-pytest -q
-uvicorn app.main:app --reload
+# Keep TRADING_MODE=paper. Set ADMIN_API_TOKEN for kill-switch / paper reset.
+alembic upgrade head
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Dashboard:
 
 ```bash
-cd frontend && npm install && npm run dev
+cd frontend && npm install
+ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-## Safety
-
-- `TRADING_MODE` defaults to `paper`
-- All orders pass through `app/risk/engine.py`
-- Use `Decimal` for money; UTC for timestamps
-- Never log secrets — use `app/core/security.redact`
-- AI (`app/ai/`) is advisory only
-
-See `.cursor/rules/atlas.mdc` and `docs/architecture/roadmap.md`.
-
-## Paper-trading validation (Phase 16)
-
-End-to-end, deterministic paper trading with **no live orders**. See
-`docs/architecture/paper_trading_data_flow.md` and the audit under `docs/audit/`.
-
-### Install
+## Docker setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"        # backend
-cp .env.example .env
-(cd frontend && npm install)   # dashboard
+docker compose up -d   # PostgreSQL + Redis
 ```
 
-### Database migrations
+Point `DATABASE_URL` at the compose Postgres instance (asyncpg URL). App processes still run on the host (or your own image) for development.
+
+## Environment variables
+
+See `.env.example`. Critical:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `TRADING_MODE` | `paper` | Must stay paper for this milestone |
+| `KILL_SWITCH_ENABLED` | `false` | Global halt for new orders |
+| `ADMIN_API_TOKEN` | (unset) | Required for mutating `/api/v1` system routes |
+| `PAPER_STARTING_BALANCE` | `10000` | Quote currency (USDT) |
+| `PAPER_FEE_BPS` / `PAPER_SLIPPAGE_BPS` | `10` / `5` | Simulated costs |
+| `ALLOWED_SYMBOLS` | `BTC/USDT` | Risk allowlist |
+| Risk `*_PERCENT` | see example | Accepts `1` or `0.01` for 1% |
+
+Never commit real secrets.
+
+## Database migrations
 
 ```bash
-alembic upgrade head           # applies 0001..0003 to a clean SQLite DB (./atlas.db)
+alembic upgrade head   # 0001..0004
 ```
 
-### Run the services (dev)
+## Running backend / frontend
 
 ```bash
-uvicorn app.main:app --reload                 # backend  -> http://127.0.0.1:8000
-npm --prefix frontend run dev                 # dashboard -> http://localhost:3000
+uvicorn app.main:app --reload
+npm --prefix frontend run dev
 ```
 
-### Offline deterministic replay (no network)
+Health: `GET /health`, `GET /api/v1/health`, `GET /api/v1/system/status`.
+
+## Run one paper cycle
 
 ```bash
-pytest -q tests/integration/test_paper_trading_replay.py
+curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m","strategy_id":"ema_crossover"}'
 ```
 
-Proves the full pipeline (candle → indicators → strategy → risk → paper fill →
-portfolio → journal → metrics) with a completed trade, idempotent replay, and
-kill-switch blocking.
+Or use **Run one paper cycle** on the overview dashboard (simulated results only).
 
-### Public-data paper-run
+CLI offline replay:
 
 ```bash
-# Deterministic, offline (works anywhere; completes a paper trade):
 python -m app.cli paper-run --offline --duration-minutes 0
-
-# Real public data (choose a reachable ccxt exchange; NO credentials needed):
-python -m app.cli paper-run --exchange kraken --symbol BTC/USD --interval 1m --duration-minutes 2
-
-# Phase-16 safety posture (all orders halted):
-KILL_SWITCH_ENABLED=true python -m app.cli paper-run --offline --duration-minutes 0
 ```
 
-Note: `--exchange binance` may return HTTP 451 from restricted locations; pick a
-reachable public exchange (e.g. `kraken`, `coinbase`, `kucoin`). The command uses
-**public** market-data endpoints only and never submits a live order.
+## Tests / quality
 
-### Expected output
+```bash
+pytest -q
+ruff check app tests
+ruff format --check app tests
+mypy app
+alembic upgrade head
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
 
-A `PAPER MODE` banner then a session summary with: candles received/rejected,
-signals, HOLD decisions, risk approvals/rejections, paper orders, fills, fees,
-realized/unrealized P&L, current balance, equity, max drawdown, open positions,
-errors. With the kill switch enabled, `paper_orders`/`fills` are `0` and
-`risk_rejections` is non-zero (orders `HALTED`).
+CI: `.github/workflows/ci.yml`.
 
-### Docker
+## Safety model
 
-No `docker-compose.yml`/`Dockerfile` ships yet (tracked in the Phase-16 audit).
-Run the services directly as above.
+- Decimal-only money; timezone-aware UTC timestamps
+- No secrets in logs (`app/core/security.redact`)
+- Kill switch blocks new orders; reads remain available
+- Paper reset requires `confirm=RESET_PAPER_ACCOUNT` + admin token
+- Live execution raises `LiveTradingDisabledError`
 
-### Troubleshooting
+## Paper versus live
 
-- **`451` from Binance:** geo-restricted; use `--exchange kraken` (or another).
-- **`no such table` on login/journal:** run `alembic upgrade head`.
-- **Dashboard shows a yellow "Demo data" banner:** the backend is unreachable —
-  start `uvicorn app.main:app` (normal operation shows live data).
-- **`next lint` prompts to configure ESLint:** use `npx tsc --noEmit` in `frontend/`.
+| Mode | Status |
+|------|--------|
+| Paper | Supported end-to-end for BTC/USDT |
+| Live | Disabled — see live readiness checklist (unchecked) |
 
-### Warnings
+## Troubleshooting
 
-- **Profitability is not guaranteed.** The bundled strategy and sample market are
-  for validation, not trading advice.
-- **Passing tests do not make this platform live-trading ready.** Phase 16 validates
-  paper trading only. Live trading remains gated off and unreachable; testnet soak
-  and live readiness are separate later phases.
+| Symptom | Fix |
+|---------|-----|
+| Binance HTTP 451 | Geo-block; use `--offline` or another public exchange |
+| `no such table` | `alembic upgrade head` |
+| Demo banner in UI | Start backend; set `ATLAS_BACKEND_URL` |
+| 503 on kill-switch/reset | Set `ADMIN_API_TOKEN` on API (and Next server for reset proxy) |
+| Startup fails with live mode | Expected — keep `TRADING_MODE=paper` |
+
+## Current limitations
+
+- In-memory paper session resets on process restart (journal tables exist for durable audit when wired with a DB session)
+- Public Binance may be unreachable from some networks
+- Backtests share strategy rules but do not always share the live risk gateway path
+- Live order execution is intentionally unimplemented
+- Simulated / backtest results **do not guarantee future performance**
+
+## Warnings
+
+This is **not** ready for live money. Passing tests validate paper trading only.

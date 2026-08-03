@@ -130,6 +130,27 @@ class TradingOrchestrator:
                 return "STALE_CANDLE"
         return None
 
+    def prime_candles(self, candles: list[Candle]) -> int:
+        """
+        Load historical closed candles into the strategy window without evaluating
+        or trading. Used to warm indicators before ``process_candle`` on the tip.
+        Skips duplicates / out-of-order bars. Returns number of candles primed.
+        """
+        primed = 0
+        for candle in candles:
+            if not candle.is_closed:
+                continue
+            reason = self._reject_reason(candle)
+            if reason is not None:
+                continue
+            symbol = candle.symbol
+            self._seen_candles.add((symbol, ensure_utc(candle.open_time)))
+            self._last_open_time[symbol] = ensure_utc(candle.open_time)
+            self._window.setdefault(symbol, []).append(candle)
+            self.paper.set_mark_price(symbol, candle.close)
+            primed += 1
+        return primed
+
     # ------------------------------------------------------------- main entry
 
     async def process_candle(self, candle: Candle) -> CandleOutcome:
@@ -157,7 +178,7 @@ class TradingOrchestrator:
 
         try:
             signal = self._evaluate(symbol, window)
-        except Exception as exc:  # noqa: BLE001 - a strategy bug must not crash the session
+        except Exception as exc:
             self.stats.errors += 1
             await self._journal_event(
                 "STRATEGY_ERROR",
@@ -425,7 +446,7 @@ class TradingOrchestrator:
         """Await a journal write; persistence must never break the trading loop."""
         try:
             await awaitable
-        except Exception:  # noqa: BLE001 - resilience: journaling is best-effort
+        except Exception:
             self.stats.errors += 1
 
     async def _journal_risk(

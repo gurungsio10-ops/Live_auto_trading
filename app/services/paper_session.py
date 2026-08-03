@@ -51,6 +51,14 @@ _BASE_PRICES: dict[str, Decimal] = {
 
 # Presentation metadata for registered strategies (governance is not on the base class).
 _STRATEGY_META: dict[str, dict[str, str]] = {
+    "ema_crossover": {
+        "governance_status": "PAPER",
+        "description": (
+            "Minimal EMA(9)/EMA(21) crossover, long-only spot. "
+            "Deterministic rule-derived signals — not predictive."
+        ),
+        "timeframe": "1m",
+    },
     "ema_trend": {
         "governance_status": "PAPER",
         "description": "Dual EMA crossover with ATR-based stops. Deterministic, no LLM in path.",
@@ -73,19 +81,26 @@ class PaperSession:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._lock = RLock()
-        self.paper = PaperTradingEngine(PaperConfig(initial_cash=Decimal(10000)))
+        starting = self.settings.paper_starting_balance
+        self.paper = PaperTradingEngine(
+            PaperConfig(
+                initial_cash=starting,
+                fee_rate=self.settings.paper_fee_rate,
+                slippage_rate=self.settings.paper_slippage_rate,
+            )
+        )
         self.risk_engine = RiskEngine(settings=self.settings, state=RiskEngineState())
         self.gateway = OrderGateway(self.paper, self.risk_engine)
 
         self.kill_switch_enabled: bool = self.settings.kill_switch_enabled
         self.trading_paused: bool = False
-        self.selected_strategy_id: str | None = "ema_trend"
+        self.selected_strategy_id: str | None = "ema_crossover"
         self.running_strategies: set[str] = set()
         self.param_overrides: dict[str, dict[str, Any]] = {}
 
-        self._initial_cash = Decimal(10000)
-        self._daily_start_equity = Decimal(10000)
-        self._peak_equity = Decimal(10000)
+        self._initial_cash = starting
+        self._daily_start_equity = starting
+        self._peak_equity = starting
         self._consecutive_losses = 0
         self._ticks: dict[str, int] = {}
 

@@ -16,9 +16,10 @@ os.environ.setdefault("KILL_SWITCH_ENABLED", "false")
 os.environ.setdefault("EXCHANGE_ENV", "paper")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-import app.auth.store  # noqa: F401 — register users ORM table
-import app.journal.store  # noqa: F401 — register journal ORM tables
-import app.models.database.market  # noqa: F401
+import app.auth.store
+import app.journal.store
+import app.models.database.market
+import app.models.database.portfolio  # noqa: F401 — paper-slice tables
 from app.core.config import get_settings
 from app.core.time import from_unix_ms
 from app.db.base import Base

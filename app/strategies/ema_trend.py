@@ -124,7 +124,9 @@ class EMATrendStrategy(Strategy):
                     else (
                         "stop-loss"
                         if hit_stop
-                        else "take-profit" if hit_target else "max holding period"
+                        else "take-profit"
+                        if hit_target
+                        else "max holding period"
                     )
                 )
                 return TradeSignal(

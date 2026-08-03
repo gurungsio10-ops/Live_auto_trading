@@ -9,7 +9,7 @@ from typing import Any
 
 from app.core.config import Settings, get_settings
 from app.core.time import ensure_utc, utc_now
-from app.models.domain.enums import OrderType, RiskDecision, RiskReasonCode
+from app.models.domain.enums import OrderSide, OrderType, RiskDecision, RiskReasonCode
 from app.models.domain.market import SymbolInfo
 from app.models.domain.trading import OrderRequest, PortfolioState, RiskEvaluation
 
@@ -81,6 +81,41 @@ class RiskEngine:
             live_eval = self._check_live_gating(context, checks)
             if live_eval is not None:
                 return live_eval
+
+        allowed = set(self.settings.allowed_symbols)
+        if allowed and request.symbol not in allowed:
+            return self._reject(
+                RiskReasonCode.SYMBOL_NOT_ALLOWED,
+                f"Symbol {request.symbol} not in ALLOWED_SYMBOLS",
+                checks,
+            )
+
+        if request.side not in (OrderSide.BUY, OrderSide.SELL):
+            return self._reject(
+                RiskReasonCode.UNSUPPORTED_SIDE,
+                f"Unsupported side: {request.side}",
+                checks,
+            )
+
+        # Long-only spot: no short selling (sell without reducing an existing long).
+        if request.side == OrderSide.SELL and not request.reduce_only:
+            has_long = any(
+                p.symbol == request.symbol and p.quantity > 0
+                for p in context.portfolio.open_positions
+            )
+            if not has_long:
+                return self._reject(
+                    RiskReasonCode.SHORT_SELLING_DISABLED,
+                    "Short selling is disabled (long-only spot)",
+                    checks,
+                )
+
+        if self.settings.default_leverage != Decimal("1"):
+            return self._reject(
+                RiskReasonCode.LEVERAGE_NOT_ALLOWED,
+                "Leverage is not allowed",
+                checks,
+            )
 
         if not self.state.market_data_healthy:
             return self._reject(

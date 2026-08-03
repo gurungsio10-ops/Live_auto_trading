@@ -112,7 +112,7 @@ async def select_strategy(body: SelectStrategyBody) -> dict:
     try:
         return get_paper_session().select_strategy(body.strategy_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+        raise HTTPException(status_code=404, detail="Strategy not found") from None
 
 
 @router.post("/strategies/{strategy_id}/start")
@@ -120,7 +120,7 @@ async def start_strategy(strategy_id: str) -> dict:
     try:
         return await get_paper_session().start_strategy(strategy_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+        raise HTTPException(status_code=404, detail="Strategy not found") from None
 
 
 @router.post("/strategies/{strategy_id}/stop")
@@ -128,7 +128,7 @@ async def stop_strategy(strategy_id: str) -> dict:
     try:
         return get_paper_session().stop_strategy(strategy_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+        raise HTTPException(status_code=404, detail="Strategy not found") from None
 
 
 @router.patch("/strategies/{strategy_id}/params")
@@ -137,9 +137,9 @@ async def update_params(strategy_id: str, body: ParamsBody) -> dict:
     try:
         return session.update_params(strategy_id, body.paper_params)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+        raise HTTPException(status_code=404, detail="Strategy not found") from None
     except PermissionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/kill-switch")

@@ -197,7 +197,7 @@ async def paper_run(args: argparse.Namespace) -> int:
                             await orch.process_candle(candle)
                             last_open = candle.open_time
                     backoff = 1.0
-                except Exception as exc:  # noqa: BLE001 - feed errors must not crash the run
+                except Exception as exc:
                     orch.stats.errors += 1
                     logger.warning(
                         "feed_error", error=type(exc).__name__, detail=str(exc)[:160]
