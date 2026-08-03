@@ -386,6 +386,9 @@ class TestnetRuntime:
         self.health.last_market_data_at = utc_now()
         self.health.market_data_fresh = True
         self.health.strategy_heartbeat_ok = True
+        # Paper broker needs a mark for market fills when EXCHANGE_ENV=paper.
+        if isinstance(self._backend, PaperTradingEngine):
+            self._backend.set_mark_price(candle.symbol, candle.close)
 
         key = (candle.symbol, candle.open_time.isoformat())
         if key in self._seen_candle_keys:
