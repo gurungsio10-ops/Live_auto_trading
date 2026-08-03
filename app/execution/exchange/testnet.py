@@ -15,6 +15,8 @@ from app.models.domain.trading import Order, OrderRequest, RiskEvaluation
 
 @dataclass
 class TestnetConfig:
+    __test__ = False  # prevent pytest collection
+
     exchange_env: str = "testnet"
     rate_limit_per_minute: int = 60
 
