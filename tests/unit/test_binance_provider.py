@@ -85,3 +85,23 @@ async def test_fetch_symbols_filters_supported():
     assert symbols[0].symbol == "BTC/USDT"
     assert symbols[0].min_notional == Decimal("10")
     await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_uses_configured_exchange_id(monkeypatch):
+    monkeypatch.setenv("EXCHANGE_ID", "binanceus")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    provider = BinanceProvider()
+    try:
+        assert provider.exchange_id == "binanceus"
+        assert provider.name == "binanceus"
+        assert provider._owns_exchange is True
+    finally:
+        await provider.close()
+
+
+def test_provider_rejects_unknown_exchange_id():
+    with pytest.raises(ValueError, match="Unsupported exchange_id"):
+        BinanceProvider(exchange_id="not-a-real-exchange")

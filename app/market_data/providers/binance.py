@@ -16,6 +16,11 @@ from app.market_data.providers.base import MarketDataProvider
 from app.market_data.providers.retry import with_exponential_backoff
 from app.models.domain.market import Candle, SymbolInfo
 
+_SUPPORTED_EXCHANGES = {
+    "binance": ccxt.binance,
+    "binanceus": ccxt.binanceus,
+}
+
 
 class BinanceProvider(MarketDataProvider):
     name = "binance"
@@ -24,6 +29,7 @@ class BinanceProvider(MarketDataProvider):
         self,
         *,
         exchange: Any | None = None,
+        exchange_id: str | None = None,
         sandbox: bool | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -32,11 +38,19 @@ class BinanceProvider(MarketDataProvider):
         if exchange is not None:
             self._exchange = exchange
             self._owns_exchange = False
+            self.exchange_id = exchange_id or settings.exchange_id
         else:
+            resolved_id = (exchange_id or settings.exchange_id).lower().strip()
+            factory = _SUPPORTED_EXCHANGES.get(resolved_id)
+            if factory is None:
+                supported = ", ".join(sorted(_SUPPORTED_EXCHANGES))
+                raise ValueError(
+                    f"Unsupported exchange_id '{resolved_id}'. Supported: {supported}"
+                )
             use_sandbox = (
                 sandbox if sandbox is not None else settings.exchange_env == "testnet"
             )
-            self._exchange = ccxt.binance(
+            self._exchange = factory(
                 {
                     "apiKey": api_key
                     or (
@@ -57,6 +71,8 @@ class BinanceProvider(MarketDataProvider):
             if use_sandbox and hasattr(self._exchange, "set_sandbox_mode"):
                 self._exchange.set_sandbox_mode(True)
             self._owns_exchange = True
+            self.exchange_id = resolved_id
+            self.name = resolved_id
 
     async def fetch_ohlcv(
         self,
