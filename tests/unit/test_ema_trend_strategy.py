@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.models.domain.enums import SignalDirection
 from app.models.domain.market import Candle
 from app.models.domain.trading import PortfolioState, Position
@@ -143,3 +145,148 @@ def test_insufficient_history_holds():
         config=StrategyConfig(strategy_id="ema_trend", params=SHORT_PARAMS),
     )
     assert strategy.evaluate(ctx).direction == SignalDirection.HOLD
+
+
+def test_unknown_strategy_raises():
+    with pytest.raises(KeyError, match="Unknown strategy"):
+        get_strategy("does_not_exist")
+
+
+def test_evaluate_is_deterministic():
+    closes = _oscillating_uptrend(10)
+    volumes = [100.0] * 9 + [400.0]
+    candles = _candles(closes, volumes=volumes)
+    strategy = EMATrendStrategy()
+    cfg = strategy.default_config()
+    cfg.params.update(SHORT_PARAMS)
+    ctx = StrategyContext(candles=candles, portfolio=_portfolio(), config=cfg)
+    first = strategy.evaluate(ctx)
+    second = strategy.evaluate(ctx)
+    assert first.direction == second.direction == SignalDirection.BUY
+    assert first.input_data_fingerprint == second.input_data_fingerprint
+    assert first.suggested_stop == second.suggested_stop
+    assert first.suggested_target == second.suggested_target
+    assert isinstance(first.suggested_stop, Decimal)
+
+
+def test_exit_on_stop_loss():
+    closes = _oscillating_uptrend(10)
+    candles = _candles(closes)
+    strategy = EMATrendStrategy()
+    cfg = strategy.default_config()
+    cfg.params.update(SHORT_PARAMS)
+    # Price at last candle; stop set above it so stop is hit immediately.
+    price = candles[-1].close
+    position = Position(
+        symbol="BTC/USDT",
+        quantity=Decimal("1"),
+        entry_price=price + Decimal("10"),
+        current_price=price,
+        unrealized_pnl=Decimal("-10"),
+        opened_at=candles[0].open_time,
+        stop_loss=price + Decimal("1"),
+        take_profit=price + Decimal("1000"),
+    )
+    signal = strategy.evaluate(
+        StrategyContext(
+            candles=candles,
+            portfolio=_portfolio(),
+            position=position,
+            indicators={"bars_held": 1},
+            config=cfg,
+        )
+    )
+    assert signal.direction == SignalDirection.EXIT
+    assert signal.metadata.get("exit_reason") == "stop-loss"
+
+
+def test_exit_on_max_holding_period():
+    closes = _oscillating_uptrend(10)
+    candles = _candles(closes)
+    strategy = EMATrendStrategy()
+    cfg = strategy.default_config()
+    cfg.params.update({**SHORT_PARAMS, "max_holding_bars": 2})
+    position = Position(
+        symbol="BTC/USDT",
+        quantity=Decimal("1"),
+        entry_price=candles[0].close,
+        current_price=candles[-1].close,
+        unrealized_pnl=Decimal("0"),
+        opened_at=candles[0].open_time,
+        stop_loss=Decimal("1"),
+        take_profit=Decimal("100000"),
+    )
+    signal = strategy.evaluate(
+        StrategyContext(
+            candles=candles,
+            portfolio=_portfolio(),
+            position=position,
+            indicators={"bars_held": 2},
+            config=cfg,
+        )
+    )
+    assert signal.direction == SignalDirection.EXIT
+    assert signal.metadata.get("exit_reason") == "max holding period"
+
+
+@pytest.mark.asyncio
+async def test_strategy_on_postgres_candles():
+    """Smoke: evaluate against Phase 2 BTC/USDT candles already in Postgres."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    from app.models.database.market import CandleORM
+
+    engine = create_async_engine(
+        "postgresql+asyncpg://atlas:atlas@localhost:5432/atlas"
+    )
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with Session() as session:
+            rows = (
+                await session.scalars(
+                    select(CandleORM)
+                    .where(
+                        CandleORM.symbol == "BTC/USDT",
+                        CandleORM.timeframe == "1h",
+                    )
+                    .order_by(CandleORM.open_time.asc())
+                )
+            ).all()
+            candles = [
+                Candle(
+                    symbol=r.symbol,
+                    timeframe=r.timeframe,
+                    open_time=r.open_time,
+                    close_time=r.close_time,
+                    open=r.open,
+                    high=r.high,
+                    low=r.low,
+                    close=r.close,
+                    volume=r.volume,
+                    is_closed=r.is_closed,
+                )
+                for r in rows
+            ]
+    finally:
+        await engine.dispose()
+
+    if len(candles) < 8:
+        return
+    strategy = EMATrendStrategy()
+    cfg = strategy.default_config()
+    cfg.params.update(SHORT_PARAMS)
+    signal = strategy.evaluate(
+        StrategyContext(candles=candles, portfolio=_portfolio(), config=cfg)
+    )
+    assert signal.direction in {
+        SignalDirection.BUY,
+        SignalDirection.HOLD,
+        SignalDirection.EXIT,
+    }
+    assert signal.input_data_fingerprint
+    assert signal.strategy_version == strategy.version
