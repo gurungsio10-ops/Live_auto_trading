@@ -752,7 +752,7 @@ class PaperSession:
             strategy, BacktestConfig(initial_cash=initial_cash)
         )
         result = engine.run(candles, write_reports=False)
-        metrics = result.metrics.to_dict()
+        metrics = self._round_metrics(result.metrics.to_dict())
         run_id = f"bt_{uuid4().hex[:12]}"
 
         report = {
@@ -792,6 +792,28 @@ class PaperSession:
         with self._lock:
             self.backtest_reports.insert(0, report)
         return report
+
+    @staticmethod
+    def _round_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+        places = {
+            "total_return": "0.0001",
+            "net_return": "0.01",
+            "win_rate": "0.0001",
+            "profit_factor": "0.01",
+            "max_drawdown": "0.0001",
+            "sharpe": "0.01",
+            "sortino": "0.01",
+            "fees_paid": "0.01",
+            "slippage_cost": "0.01",
+        }
+        rounded = dict(metrics)
+        for key, place in places.items():
+            if key in rounded and rounded[key] is not None:
+                try:
+                    rounded[key] = str(Decimal(str(rounded[key])).quantize(Decimal(place)))
+                except (ValueError, ArithmeticError):
+                    pass
+        return rounded
 
     @staticmethod
     def _backtest_markdown(name: str, run_id: str, metrics: dict[str, Any]) -> str:
