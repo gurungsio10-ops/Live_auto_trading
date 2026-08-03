@@ -1,0 +1,28 @@
+---
+description: Project Atlas safety and architecture rules
+alwaysApply: true
+---
+
+# Project Atlas — non-negotiable rules
+
+1. TRADING_MODE defaults to "paper". Never change this default.
+2. Live order submission must always require: LIVE_TRADING_ENABLED=true,
+   KILL_SWITCH_ENABLED=false, valid exchange credentials, risk engine
+   healthy, market data healthy, database healthy, reconciliation healthy,
+   and a valid manual live-approval token — ALL simultaneously. Never
+   remove or weaken any of these checks, even temporarily, even for testing.
+3. Every order must pass through app/risk/engine.py. No execution code may
+   call an exchange or the paper engine directly, bypassing risk checks.
+4. Use Decimal for all price/quantity/balance/fee/P&L values. Never float.
+5. All timestamps are UTC.
+6. Never hardcode or print API keys/secrets. Use app/core/security.py's
+   redact() helpers before logging anything that touches Settings.
+7. The AI analysis layer (app/ai/) is advisory only — it must never call
+   order-submission code directly, and its output must be labeled advisory
+   in the API response and UI.
+8. Every rejected trade must be persisted with a reason code, not just
+   approved trades.
+9. Read docs/architecture/roadmap.md before starting any phase. Do not
+   start a phase whose prerequisites aren't marked done.
+10. Write tests alongside every module you create, not after. Target 90%+
+    coverage on app/risk/ and app/execution/ specifically.
