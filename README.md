@@ -11,6 +11,13 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
 pytest -q
+uvicorn app.main:app --reload
+```
+
+Dashboard:
+
+```bash
+cd frontend && npm install && npm run dev
 ```
 
 ## Safety
@@ -19,5 +26,6 @@ pytest -q
 - All orders pass through `app/risk/engine.py`
 - Use `Decimal` for money; UTC for timestamps
 - Never log secrets — use `app/core/security.redact`
+- AI (`app/ai/`) is advisory only
 
 See `.cursor/rules/atlas.mdc` and `docs/architecture/roadmap.md`.
