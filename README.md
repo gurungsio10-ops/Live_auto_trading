@@ -135,13 +135,34 @@ CI: `.github/workflows/ci.yml`.
 | 503 on kill-switch/reset | Set `ADMIN_API_TOKEN` on API (and Next server for reset proxy) |
 | Startup fails with live mode | Expected — keep `TRADING_MODE=paper` |
 
+## Binance Spot Testnet (Sprint 1)
+
+See `docs/architecture/binance_spot_testnet.md`.
+
+```bash
+# Keys from https://testnet.binance.vision/
+EXCHANGE_ENV=testnet
+EXCHANGE_API_KEY=...
+EXCHANGE_API_SECRET=...
+TRADING_MODE=paper   # keep paper — testnet ≠ live money
+
+curl -X POST http://127.0.0.1:8000/api/v1/testnet/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m","use_sample_candles":true}'
+```
+
+`EXCHANGE_ENV=live` / `TRADING_MODE=live` raises `LiveTradingDisabledError`.
+
+Docker: `docker compose up -d` (postgres/redis); `docker compose --profile app up -d` for API.
+
 ## Current limitations
 
 - In-memory paper session resets on process restart (journal tables exist for durable audit when wired with a DB session)
 - Public Binance may be unreachable from some networks
 - Backtests share strategy rules but do not always share the live risk gateway path
 - Live order execution is intentionally unimplemented
-- Simulated / backtest results **do not guarantee future performance**
+- Real WS transport must be attached for multi-hour soak (injectable in tests)
+- Simulated / backtest / testnet results **do not guarantee future performance**
 
 ## Warnings
 

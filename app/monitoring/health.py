@@ -9,6 +9,8 @@ from typing import Any, Protocol
 from app.core.config import get_settings
 from app.core.time import utc_now
 
+# Re-export Any for webhook client typing without circular imports.
+
 
 @dataclass
 class ComponentHealth:
@@ -60,11 +62,14 @@ class ConsoleAlertChannel:
 
 
 class WebhookAlertChannel:
-    """Interface only — no real credentials required."""
+    """Posts JSON alerts to ``WEBHOOK_ALERT_URL`` when configured (httpx)."""
 
-    def __init__(self, url: str | None = None) -> None:
+    def __init__(
+        self, url: str | None = None, *, http_client: Any | None = None
+    ) -> None:
         self.url = url
         self.sent: list[dict[str, Any]] = []
+        self._http = http_client
 
     async def send(
         self, event: str, message: str, payload: dict[str, Any] | None = None
@@ -76,7 +81,19 @@ class WebhookAlertChannel:
             "ts": utc_now().isoformat(),
         }
         self.sent.append(body)
-        # Intentionally does not perform HTTP unless url set and httpx used by caller later.
+        if not self.url:
+            return
+        try:
+            import httpx
+
+            client = self._http
+            if client is None:
+                async with httpx.AsyncClient(timeout=5.0) as session:
+                    await session.post(self.url, json=body)
+            else:
+                await client.post(self.url, json=body)
+        except Exception:
+            pass
 
 
 @dataclass

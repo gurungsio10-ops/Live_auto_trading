@@ -50,6 +50,22 @@ class Settings(BaseSettings):
     exchange_api_key: SecretStr | None = None
     exchange_api_secret: SecretStr | None = None
 
+    # Binance Spot Testnet endpoints only (never production for execution).
+    binance_testnet_rest_url: str = Field(
+        default="https://testnet.binance.vision",
+        validation_alias="BINANCE_TESTNET_REST_URL",
+    )
+    binance_testnet_ws_url: str = Field(
+        default="wss://stream.testnet.binance.vision/ws",
+        validation_alias="BINANCE_TESTNET_WS_URL",
+    )
+    testnet_reconcile_seconds: int = Field(
+        default=30, ge=5, validation_alias="TESTNET_RECONCILE_SECONDS"
+    )
+    order_cooldown_seconds: int = Field(
+        default=5, ge=0, validation_alias="ORDER_COOLDOWN_SECONDS"
+    )
+
     database_url: str = Field(
         default="sqlite+aiosqlite:///./atlas.db", validation_alias="DATABASE_URL"
     )
@@ -172,9 +188,13 @@ class Settings(BaseSettings):
         """
         Fail closed at application startup.
 
-        Live mode without every explicit gate → ConfigurationError.
-        Live mode with gates → LiveTradingDisabledError (not implemented yet).
+        ``EXCHANGE_ENV=live`` or ``TRADING_MODE=live`` always raise
+        ``LiveTradingDisabledError`` in this sprint — Spot Testnet only.
         """
+        if self.exchange_env == "live":
+            raise LiveTradingDisabledError(
+                "EXCHANGE_ENV=live is disabled. Use paper or testnet only."
+            )
         if self.trading_mode != "live":
             return
         token = (
@@ -196,7 +216,8 @@ class Settings(BaseSettings):
                 "exchange_env testnet|live, and kill switch off)."
             )
         raise LiveTradingDisabledError(
-            "Live trading mode is not implemented. Keep TRADING_MODE=paper."
+            "Live trading mode is not implemented. Keep TRADING_MODE=paper "
+            "and use EXCHANGE_ENV=testnet for Binance Spot Testnet."
         )
 
     @property
