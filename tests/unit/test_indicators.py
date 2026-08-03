@@ -106,3 +106,43 @@ def test_empty_input_raises():
         rsi([], 14)
     with pytest.raises(InsufficientDataError):
         atr([], [], [], 14)
+
+
+def test_invalid_period_and_length_mismatch():
+    with pytest.raises(ValueError, match="period must be > 0"):
+        sma([1, 2, 3], 0)
+    with pytest.raises(ValueError, match="period must be > 0"):
+        ema([1, 2, 3], -1)
+    with pytest.raises(ValueError, match="length mismatch"):
+        atr([1, 2], [1], [1, 2], 2)
+    with pytest.raises(ValueError, match="fast period must be < slow period"):
+        macd([1, 2, 3, 4, 5], fast=5, slow=3)
+
+
+def test_decimal_candle_inputs_stay_decimal():
+    """Indicators accept Decimal OHLC (as stored in DB) and never emit float."""
+    closes = [Decimal("100.5"), Decimal("101.25"), Decimal("99.75"), Decimal("102")]
+    highs = [Decimal("101"), Decimal("102"), Decimal("100.5"), Decimal("103")]
+    lows = [Decimal("99.5"), Decimal("100"), Decimal("98.5"), Decimal("100.5")]
+    volumes = [Decimal("1.5"), Decimal("2.0"), Decimal("1.25"), Decimal("3.0")]
+
+    for series in (
+        sma(closes, 2),
+        ema(closes, 2),
+        rsi(closes, 2),
+        atr(highs, lows, closes, 2),
+        volume_ma(volumes, 2),
+        highest_high(highs, 2),
+        lowest_low(lows, 2),
+        vwap(highs, lows, closes, volumes),
+    ):
+        for value in series:
+            if value is not None:
+                assert isinstance(value, Decimal)
+                assert not isinstance(value, float)
+
+    bb = bollinger_bands(closes, 2)
+    for band in (bb.middle, bb.upper, bb.lower):
+        for value in band:
+            if value is not None:
+                assert isinstance(value, Decimal)
