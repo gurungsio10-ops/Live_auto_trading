@@ -11,7 +11,13 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.execution.exchange import ExchangeTestnetClient
 from app.execution.live_gate import LIVE_CONDITIONS, LiveReadinessState, LiveTradingGate
-from app.models.domain.enums import OrderSide, OrderStatus, OrderType, RiskDecision, RiskReasonCode
+from app.models.domain.enums import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RiskDecision,
+    RiskReasonCode,
+)
 from app.models.domain.trading import OrderRequest, RiskEvaluation
 
 
@@ -93,7 +99,9 @@ def test_each_live_condition_blocks_individually(
         live_approval_valid=True,
     )
     state_kwargs.update(override_state)
-    gate = LiveTradingGate(_live_settings(**override_settings), LiveReadinessState(**state_kwargs))
+    gate = LiveTradingGate(
+        _live_settings(**override_settings), LiveReadinessState(**state_kwargs)
+    )
     result = gate.evaluate()
     assert result.allowed is False
     assert expected_condition in result.failed_conditions

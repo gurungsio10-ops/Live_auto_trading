@@ -53,13 +53,23 @@ def compute_metrics(
     gross_loss = abs(sum(losses, Decimal("0")))
     net = final_equity - initial_cash
     total_return = (final_equity / initial_cash - 1) if initial_cash else Decimal("0")
-    win_rate = (Decimal(len(wins)) / Decimal(trade_count)) if trade_count else Decimal("0")
-    profit_factor = (
-        (gross_profit / gross_loss) if gross_loss > 0 else (Decimal("Infinity") if gross_profit > 0 else Decimal("0"))
+    win_rate = (
+        (Decimal(len(wins)) / Decimal(trade_count)) if trade_count else Decimal("0")
     )
-    expectancy = (sum(pnls, Decimal("0")) / Decimal(trade_count)) if trade_count else Decimal("0")
+    profit_factor = (
+        (gross_profit / gross_loss)
+        if gross_loss > 0
+        else (Decimal("Infinity") if gross_profit > 0 else Decimal("0"))
+    )
+    expectancy = (
+        (sum(pnls, Decimal("0")) / Decimal(trade_count))
+        if trade_count
+        else Decimal("0")
+    )
     avg_win = (sum(wins, Decimal("0")) / Decimal(len(wins))) if wins else Decimal("0")
-    avg_loss = (sum(losses, Decimal("0")) / Decimal(len(losses))) if losses else Decimal("0")
+    avg_loss = (
+        (sum(losses, Decimal("0")) / Decimal(len(losses))) if losses else Decimal("0")
+    )
     rr = (avg_win / abs(avg_loss)) if avg_loss != 0 else Decimal("0")
     fees = sum((t.fees for t in trades), Decimal("0"))
     slip = sum((t.slippage_cost for t in trades), Decimal("0"))
@@ -78,7 +88,6 @@ def compute_metrics(
     cons_w = _max_streak(pnls, winning=True)
     cons_l = _max_streak(pnls, winning=False)
 
-    exposed_bars = sum(1 for t in trades if t.exit_time and t.entry_time)
     # Approximate exposure as fraction of bars with open trade intervals
     exposure = Decimal("0")
     if equity_curve and trades:
@@ -89,7 +98,9 @@ def compute_metrics(
             if t.exit_time is None:
                 continue
             in_trade += sum(1 for ts in times if t.entry_time <= ts <= t.exit_time)
-        exposure = Decimal(in_trade) / Decimal(total_bars) if total_bars else Decimal("0")
+        exposure = (
+            Decimal(in_trade) / Decimal(total_bars) if total_bars else Decimal("0")
+        )
 
     return PerformanceMetrics(
         total_return=total_return,
@@ -97,7 +108,9 @@ def compute_metrics(
         gross_profit=gross_profit,
         gross_loss=gross_loss,
         win_rate=win_rate,
-        profit_factor=profit_factor if profit_factor != Decimal("Infinity") else Decimal("999999"),
+        profit_factor=(
+            profit_factor if profit_factor != Decimal("Infinity") else Decimal("999999")
+        ),
         expectancy=expectancy,
         max_drawdown=max_dd,
         sharpe=sharpe,

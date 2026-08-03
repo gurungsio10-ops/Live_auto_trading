@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 ADVISORY_LABEL = "Advisory — not an executed action"
 
 
@@ -44,8 +43,16 @@ class TradingAnalyst:
     )
 
     def explain_trade(self, journal_record: dict[str, Any]) -> AdvisoryResponse:
-        rationale = journal_record.get("entry_rationale") or journal_record.get("reason") or "n/a"
-        decision = journal_record.get("risk_decision") or journal_record.get("decision") or "n/a"
+        rationale = (
+            journal_record.get("entry_rationale")
+            or journal_record.get("reason")
+            or "n/a"
+        )
+        decision = (
+            journal_record.get("risk_decision")
+            or journal_record.get("decision")
+            or "n/a"
+        )
         content = (
             f"Trade explanation (advisory): strategy proposed action with rationale "
             f"'{rationale}'. Risk decision was '{decision}'. "

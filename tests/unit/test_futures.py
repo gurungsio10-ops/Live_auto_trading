@@ -17,5 +17,7 @@ def test_liquidation_and_funding():
     assert liq > 0
     fee = funding_fee(Decimal("1000"), Decimal("0.0001"))
     assert fee == Decimal("0.1")
-    ok = validate_leverage(Decimal("1"), entry=Decimal("100000"), min_liquidation_distance=Decimal("0"))
+    ok = validate_leverage(
+        Decimal("1"), entry=Decimal("100000"), min_liquidation_distance=Decimal("0")
+    )
     assert ok.ok is True

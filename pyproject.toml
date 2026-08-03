@@ -31,6 +31,8 @@ dev = [
   "pytest-cov>=5.0.0",
   "respx>=0.21.1",
   "ruff>=0.6.0",
+  "black>=24.8.0",
+  "mypy>=1.11.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -49,3 +51,32 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# Keep Decimal("...") constructors — intentional for money values (never float).
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+  "E501",    # line length enforced by black
+  "FURB157", # Decimal string form is intentional
+  "E741",    # candle o/h/l/c shorthand is domain convention
+  "UP042",   # str+Enum remains intentional for JSON serialization
+  "B905",    # zip(strict=) not required for equal-length indicator series
+  "SIM102",  # nested risk checks are clearer as written
+  "SIM105",  # explicit try/except preferred for cancel paths
+  "RUF012",  # ClassVar mutable defaults handled case-by-case
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
+disallow_untyped_defs = false

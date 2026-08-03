@@ -33,8 +33,12 @@ class SymbolORM(Base):
     tick_size: Mapped[Decimal] = mapped_column(Numeric(36, 18), nullable=False)
     step_size: Mapped[Decimal] = mapped_column(Numeric(36, 18), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class CandleORM(Base):
@@ -57,4 +61,6 @@ class CandleORM(Base):
     quote_volume: Mapped[Decimal | None] = mapped_column(Numeric(36, 18))
     trade_count: Mapped[int | None] = mapped_column(Integer)
     is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

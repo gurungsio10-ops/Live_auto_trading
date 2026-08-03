@@ -43,14 +43,18 @@ class SystemHealth:
 
 
 class AlertChannel(Protocol):
-    async def send(self, event: str, message: str, payload: dict[str, Any] | None = None) -> None: ...
+    async def send(
+        self, event: str, message: str, payload: dict[str, Any] | None = None
+    ) -> None: ...
 
 
 class ConsoleAlertChannel:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
 
-    async def send(self, event: str, message: str, payload: dict[str, Any] | None = None) -> None:
+    async def send(
+        self, event: str, message: str, payload: dict[str, Any] | None = None
+    ) -> None:
         self.sent.append({"event": event, "message": message, "payload": payload or {}})
         print(f"[ALERT] {event}: {message}")
 
@@ -62,8 +66,15 @@ class WebhookAlertChannel:
         self.url = url
         self.sent: list[dict[str, Any]] = []
 
-    async def send(self, event: str, message: str, payload: dict[str, Any] | None = None) -> None:
-        body = {"event": event, "message": message, "payload": payload or {}, "ts": utc_now().isoformat()}
+    async def send(
+        self, event: str, message: str, payload: dict[str, Any] | None = None
+    ) -> None:
+        body = {
+            "event": event,
+            "message": message,
+            "payload": payload or {},
+            "ts": utc_now().isoformat(),
+        }
         self.sent.append(body)
         # Intentionally does not perform HTTP unless url set and httpx used by caller later.
 
@@ -117,7 +128,9 @@ class MonitoringService:
             components=components,
         )
 
-    async def alert(self, event: str, message: str, payload: dict[str, Any] | None = None) -> None:
+    async def alert(
+        self, event: str, message: str, payload: dict[str, Any] | None = None
+    ) -> None:
         for channel in self.channels:
             await channel.send(event, message, payload)
 
@@ -132,9 +145,15 @@ class MonitoringService:
         }
         for comp in health.components:
             if not comp.healthy and comp.name in mapping:
-                await self.alert(mapping[comp.name], f"{comp.name} unhealthy", {"detail": comp.detail})
+                await self.alert(
+                    mapping[comp.name],
+                    f"{comp.name} unhealthy",
+                    {"detail": comp.detail},
+                )
         if health.kill_switch_enabled:
             await self.alert("KILL_SWITCH_ACTIVATED", "Kill switch is enabled")
         if self.registry.error_count >= 5:
-            await self.alert("REPEATED_EXCHANGE_ERRORS", f"error_count={self.registry.error_count}")
+            await self.alert(
+                "REPEATED_EXCHANGE_ERRORS", f"error_count={self.registry.error_count}"
+            )
         return health
