@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy import DateTime, String, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.auth.passwords import hash_password, verify_password
@@ -20,9 +20,13 @@ class UserORM(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    username: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    username: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class UserStore:
@@ -36,10 +40,11 @@ class UserStore:
         # (checkfirst makes this a no-op when it already exists).
         bind = self.session.get_bind()
         engine = getattr(bind, "engine", bind)
+        if not isinstance(engine, AsyncEngine):
+            return
         async with engine.begin() as conn:
-            await conn.run_sync(
-                lambda sync_conn: UserORM.__table__.create(sync_conn, checkfirst=True)
-            )
+            # checkfirst (default) only creates tables that are missing.
+            await conn.run_sync(Base.metadata.create_all)
 
     async def get(self, username: str) -> UserORM | None:
         try:

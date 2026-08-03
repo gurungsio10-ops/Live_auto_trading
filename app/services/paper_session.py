@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime
 from decimal import Decimal
 from threading import RLock
 from typing import Any
@@ -45,9 +44,9 @@ from app.strategies.registry import get_strategy, list_strategies
 
 # Reference prices used to synthesise a deterministic paper market per symbol.
 _BASE_PRICES: dict[str, Decimal] = {
-    "BTC/USDT": Decimal("65000"),
-    "ETH/USDT": Decimal("3200"),
-    "SOL/USDT": Decimal("150"),
+    "BTC/USDT": Decimal(65000),
+    "ETH/USDT": Decimal(3200),
+    "SOL/USDT": Decimal(150),
 }
 
 # Presentation metadata for registered strategies (governance is not on the base class).
@@ -74,9 +73,7 @@ class PaperSession:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._lock = RLock()
-        self.paper = PaperTradingEngine(
-            PaperConfig(initial_cash=Decimal("10000"))
-        )
+        self.paper = PaperTradingEngine(PaperConfig(initial_cash=Decimal(10000)))
         self.risk_engine = RiskEngine(settings=self.settings, state=RiskEngineState())
         self.gateway = OrderGateway(self.paper, self.risk_engine)
 
@@ -86,9 +83,9 @@ class PaperSession:
         self.running_strategies: set[str] = set()
         self.param_overrides: dict[str, dict[str, Any]] = {}
 
-        self._initial_cash = Decimal("10000")
-        self._daily_start_equity = Decimal("10000")
-        self._peak_equity = Decimal("10000")
+        self._initial_cash = Decimal(10000)
+        self._daily_start_equity = Decimal(10000)
+        self._peak_equity = Decimal(10000)
         self._consecutive_losses = 0
         self._ticks: dict[str, int] = {}
 
@@ -103,11 +100,9 @@ class PaperSession:
     # ------------------------------------------------------------------ market
 
     def _base_price(self, symbol: str) -> Decimal:
-        return _BASE_PRICES.get(symbol, Decimal("100"))
+        return _BASE_PRICES.get(symbol, Decimal(100))
 
-    def _candles_from_closes(
-        self, symbol: str, closes: list[Decimal]
-    ) -> list[Candle]:
+    def _candles_from_closes(self, symbol: str, closes: list[Decimal]) -> list[Candle]:
         timeframe = _STRATEGY_META.get("ema_trend", {}).get("timeframe", "1h")
         candles: list[Candle] = []
         start = utc_now()
@@ -121,9 +116,9 @@ class PaperSession:
             )
             hi = (max(open_, close) * Decimal("1.0015")).quantize(Decimal("0.01"))
             lo = (min(open_, close) * Decimal("0.9985")).quantize(Decimal("0.01"))
-            vol = Decimal("1000") + Decimal("300") * Decimal(str(abs(math.sin(i / 3.0))))
+            vol = Decimal(1000) + Decimal(300) * Decimal(str(abs(math.sin(i / 3.0))))
             if i == n - 1:
-                vol = Decimal("5000")  # final spike so volume > volume MA on entry bar
+                vol = Decimal(5000)  # final spike so volume > volume MA on entry bar
             candles.append(
                 Candle(
                     symbol=symbol,
@@ -148,19 +143,33 @@ class PaperSession:
         ``tick`` lifts the overall level each call so marks/P&L move over time.
         """
         base = self._base_price(symbol) * (
-            Decimal("1") + Decimal("0.002") * Decimal(self._ticks.get(symbol, 0))
+            Decimal(1) + Decimal("0.002") * Decimal(self._ticks.get(symbol, 0))
         )
-        closes = [base * (Decimal("1") + Decimal("0.0015") * Decimal(i)) for i in range(bars)]
+        closes = [
+            base * (Decimal(1) + Decimal("0.0015") * Decimal(i)) for i in range(bars)
+        ]
         # Tail zig-zag: balanced up/down bar returns keep RSI in the mid band while
         # the final bar closes up — a genuine (non-overbought) entry trigger.
         tail = [
-            "0.004", "-0.006", "0.003", "-0.007", "0.004", "-0.006", "0.005",
-            "-0.007", "0.004", "-0.006", "0.005", "-0.007", "0.004", "0.006",
+            "0.004",
+            "-0.006",
+            "0.003",
+            "-0.007",
+            "0.004",
+            "-0.006",
+            "0.005",
+            "-0.007",
+            "0.004",
+            "-0.006",
+            "0.005",
+            "-0.007",
+            "0.004",
+            "0.006",
         ]
         k0 = bars - len(tail)
         c = closes[k0 - 1]
         for k, r in enumerate(tail):
-            c = c * (Decimal("1") + Decimal(r))
+            c = c * (Decimal(1) + Decimal(r))
             closes[k0 + k] = c
         return self._candles_from_closes(symbol, closes)
 
@@ -170,7 +179,7 @@ class PaperSession:
         closes = [
             base
             * (
-                Decimal("1")
+                Decimal(1)
                 + Decimal("0.0008") * Decimal(i)
                 + Decimal("0.02") * Decimal(str(math.sin(i / 7.0)))
             )
@@ -202,9 +211,9 @@ class PaperSession:
         drawdown = (
             (self._peak_equity - equity) / self._peak_equity
             if self._peak_equity > 0
-            else Decimal("0")
+            else Decimal(0)
         )
-        unrealized = sum((p.unrealized_pnl for p in self._positions()), Decimal("0"))
+        unrealized = sum((p.unrealized_pnl for p in self._positions()), Decimal(0))
         daily_pnl = equity - self._daily_start_equity
         return PortfolioState(
             cash_balance=self.paper.state.cash,
@@ -238,7 +247,7 @@ class PaperSession:
         drawdown = (
             (self._peak_equity - equity) / self._peak_equity
             if self._peak_equity > 0
-            else Decimal("0")
+            else Decimal(0)
         )
         self.equity_curve.append(
             {
@@ -320,7 +329,7 @@ class PaperSession:
             side=request.side,
             order_type=request.order_type,
             quantity=request.quantity,
-            filled_quantity=Decimal("0"),
+            filled_quantity=Decimal(0),
             price=request.price,
             status=OrderStatus.REJECTED,
             strategy_name=request.strategy_name,
@@ -421,11 +430,15 @@ class PaperSession:
             "confidence": str(signal.confidence.quantize(Decimal("0.01"))),
             "entry_rationale": signal.entry_rationale,
             "invalidation_condition": signal.invalidation_condition,
-            "suggested_stop": _q(signal.suggested_stop) if signal.suggested_stop else None,
+            "suggested_stop": _q(signal.suggested_stop)
+            if signal.suggested_stop
+            else None,
             "suggested_target": (
                 _q(signal.suggested_target) if signal.suggested_target else None
             ),
-            "suggested_entry": _q(signal.suggested_entry) if signal.suggested_entry else None,
+            "suggested_entry": _q(signal.suggested_entry)
+            if signal.suggested_entry
+            else None,
         }
 
     # --------------------------------------------------------------- public views
@@ -491,7 +504,11 @@ class PaperSession:
         strategy = get_strategy(strategy_id)
         meta = _STRATEGY_META.get(
             strategy_id,
-            {"governance_status": "DRAFT", "description": strategy.name, "timeframe": "1h"},
+            {
+                "governance_status": "DRAFT",
+                "description": strategy.name,
+                "timeframe": "1h",
+            },
         )
         params = self.param_overrides.get(strategy_id)
         if params is None:
@@ -594,9 +611,7 @@ class PaperSession:
             self.running_strategies.discard(strategy_id)
             return self._strategy_dict(strategy_id)
 
-    def update_params(
-        self, strategy_id: str, params: dict[str, Any]
-    ) -> dict[str, Any]:
+    def update_params(self, strategy_id: str, params: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             get_strategy(strategy_id)
             meta = _STRATEGY_META.get(strategy_id, {"governance_status": "DRAFT"})
@@ -677,7 +692,7 @@ class PaperSession:
         # Request ~10% of cash; the risk engine will size it down to limits.
         notional = self.paper.state.cash * Decimal("0.1")
         if price <= 0:
-            return Decimal("0")
+            return Decimal(0)
         return (notional / price).quantize(Decimal("0.00000001"))
 
     # ------------------------------------------------------------------ manual
@@ -692,9 +707,13 @@ class PaperSession:
             order_type=OrderType(payload["order_type"]),
             quantity=Decimal(str(payload["quantity"])),
             price=Decimal(str(payload["price"])) if payload.get("price") else None,
-            stop_loss=Decimal(str(payload["stop_loss"])) if payload.get("stop_loss") else None,
+            stop_loss=Decimal(str(payload["stop_loss"]))
+            if payload.get("stop_loss")
+            else None,
             take_profit=(
-                Decimal(str(payload["take_profit"])) if payload.get("take_profit") else None
+                Decimal(str(payload["take_profit"]))
+                if payload.get("take_profit")
+                else None
             ),
             strategy_name=payload.get("strategy_name") or "manual",
         )
@@ -712,7 +731,7 @@ class PaperSession:
         for _ in range(4):
             with self._lock:
                 position = self.paper.state.positions.get(symbol)
-                qty = position.quantity if position else Decimal("0")
+                qty = position.quantity if position else Decimal(0)
                 mark = self._mark(symbol)
             if qty <= 0:
                 break
@@ -748,9 +767,7 @@ class PaperSession:
         initial_cash = Decimal(str(request.get("initial_cash") or "10000"))
 
         candles = self._backtest_series(symbol, bars=180)
-        engine = BacktestEngine(
-            strategy, BacktestConfig(initial_cash=initial_cash)
-        )
+        engine = BacktestEngine(strategy, BacktestConfig(initial_cash=initial_cash))
         result = engine.run(candles, write_reports=False)
         metrics = self._round_metrics(result.metrics.to_dict())
         run_id = f"bt_{uuid4().hex[:12]}"
@@ -810,7 +827,9 @@ class PaperSession:
         for key, place in places.items():
             if key in rounded and rounded[key] is not None:
                 try:
-                    rounded[key] = str(Decimal(str(rounded[key])).quantize(Decimal(place)))
+                    rounded[key] = str(
+                        Decimal(str(rounded[key])).quantize(Decimal(place))
+                    )
                 except (ValueError, ArithmeticError):
                     pass
         return rounded

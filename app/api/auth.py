@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,8 @@ from app.db.base import get_session
 
 router = APIRouter(tags=["auth"])
 
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
 
 class LoginBody(BaseModel):
     username: str
@@ -29,9 +33,7 @@ class VerifyBody(BaseModel):
 
 
 @router.post("/auth/login")
-async def login(
-    body: LoginBody, session: AsyncSession = Depends(get_session)
-) -> dict:
+async def login(body: LoginBody, session: SessionDep) -> dict:
     store = UserStore(session)
     await store.ensure_seeded()
     if not await store.verify(body.username.strip(), body.password):
