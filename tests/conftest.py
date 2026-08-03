@@ -22,6 +22,7 @@ from app.models.domain.market import Candle
 from app.core.time import from_unix_ms
 import app.models.database.market  # noqa: F401
 import app.journal.store  # noqa: F401 — register journal ORM tables
+import app.auth.store  # noqa: F401 — register users ORM table
 
 
 @pytest.fixture(autouse=True)

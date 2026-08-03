@@ -8,6 +8,7 @@
 
 export const SESSION_COOKIE = "atlas_session";
 export const SESSION_MAX_AGE = 60 * 60 * 8; // 8 hours
+export const REMEMBER_MAX_AGE = 60 * 60 * 24 * 30; // 30 days ("remember me")
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

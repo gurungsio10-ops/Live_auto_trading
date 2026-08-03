@@ -11,6 +11,7 @@ function LoginForm() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,7 +23,7 @@ function LoginForm() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, remember }),
       });
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -71,6 +72,15 @@ function LoginForm() {
             className="mt-1 w-full border border-terminal-border bg-[var(--elevated)] px-3 py-2 text-sm text-terminal-text outline-none focus:border-terminal-accent"
             required
           />
+        </label>
+        <label className="flex items-center gap-2 text-[11px] text-terminal-dim">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            className="h-3.5 w-3.5 accent-terminal-accent"
+          />
+          Remember me for 30 days
         </label>
         {error && (
           <p className="border border-terminal-danger/50 bg-terminal-danger/10 px-3 py-2 text-[11px] text-terminal-loss font-mono">
