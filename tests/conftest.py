@@ -20,6 +20,8 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.models.domain.market import Candle
 from app.core.time import from_unix_ms
+import app.models.database.market  # noqa: F401
+import app.journal.store  # noqa: F401 — register journal ORM tables
 
 
 @pytest.fixture(autouse=True)
