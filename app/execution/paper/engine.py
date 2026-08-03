@@ -117,11 +117,11 @@ class PaperTradingEngine:
         if fill_qty <= 0:
             return self._update(order, status=OrderStatus.FAILED, risk=risk)
 
-        if fill_qty < request.quantity:
-            order = self._apply_fill(order, fill_qty, fill_price, risk)
-            return self._update(order, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
-
         order = self._apply_fill(order, fill_qty, fill_price, risk)
+        if order.status == OrderStatus.FAILED:
+            return order
+        if fill_qty < request.quantity:
+            return self._update(order, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
         return self._update(order, status=OrderStatus.FILLED, risk=risk)
 
     def _apply_fill(

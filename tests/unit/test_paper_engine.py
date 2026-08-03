@@ -266,3 +266,163 @@ async def test_replay_byte_identical_output():
     a = await run_sequence()
     b = await run_sequence()
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_limit_uses_limit_price_as_mark_when_unset():
+    engine = PaperTradingEngine()
+    order = await engine.submit(
+        _req(
+            order_type=OrderType.LIMIT,
+            price=Decimal("100000"),
+            idempotency_key="limit-as-mark",
+        ),
+        _risk_ok(),
+    )
+    assert order.status == OrderStatus.FILLED
+    assert order.average_fill_price is not None
+
+
+@pytest.mark.asyncio
+async def test_limit_sell_rests_when_mark_below_limit():
+    engine = PaperTradingEngine()
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    await engine.submit(_req(idempotency_key="seed-long"), _risk_ok())
+    order = await engine.submit(
+        _req(
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            price=Decimal("110000"),
+            idempotency_key="limit-sell-rest",
+        ),
+        _risk_ok(),
+    )
+    assert order.status == OrderStatus.SUBMITTED
+    assert order.filled_quantity == Decimal("0")
+    assert "BTC/USDT" in engine.state.positions
+
+
+@pytest.mark.asyncio
+async def test_zero_partial_fill_fraction_fails():
+    engine = PaperTradingEngine(
+        PaperConfig(partial_fill_fraction=Decimal("0"), initial_cash=Decimal("10000"))
+    )
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    order = await engine.submit(_req(idempotency_key="zero-fill"), _risk_ok())
+    assert order.status == OrderStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_insufficient_cash_fails_buy():
+    engine = PaperTradingEngine(PaperConfig(initial_cash=Decimal("1")))
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    order = await engine.submit(
+        _req(quantity=Decimal("0.01"), idempotency_key="no-cash"),
+        _risk_ok(Decimal("0.01")),
+    )
+    assert order.status == OrderStatus.FAILED
+    assert order.metadata.get("error") == "insufficient"
+
+
+@pytest.mark.asyncio
+async def test_buy_averages_into_existing_position():
+    engine = PaperTradingEngine(PaperConfig(initial_cash=Decimal("100000")))
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    await engine.submit(
+        _req(quantity=Decimal("0.01"), idempotency_key="avg-1"),
+        _risk_ok(Decimal("0.01")),
+    )
+    engine.set_mark_price("BTC/USDT", Decimal("110000"))
+    await engine.submit(
+        _req(quantity=Decimal("0.01"), idempotency_key="avg-2"),
+        _risk_ok(Decimal("0.01")),
+    )
+    pos = engine.state.positions["BTC/USDT"]
+    assert pos.quantity == Decimal("0.02")
+    assert Decimal("100000") < pos.entry_price < Decimal("110000")
+
+
+@pytest.mark.asyncio
+async def test_sell_without_position_fails():
+    engine = PaperTradingEngine()
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    order = await engine.submit(
+        _req(side=OrderSide.SELL, idempotency_key="naked-sell"),
+        _risk_ok(),
+    )
+    assert order.status == OrderStatus.FAILED
+    assert order.metadata.get("error") == "no position"
+
+
+@pytest.mark.asyncio
+async def test_partial_sell_leaves_remaining_position():
+    engine = PaperTradingEngine(PaperConfig(initial_cash=Decimal("100000")))
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    await engine.submit(
+        _req(quantity=Decimal("0.02"), idempotency_key="ps-buy"),
+        _risk_ok(Decimal("0.02")),
+    )
+    order = await engine.submit(
+        _req(side=OrderSide.SELL, quantity=Decimal("0.01"), idempotency_key="ps-sell"),
+        _risk_ok(Decimal("0.01")),
+    )
+    assert order.status == OrderStatus.FILLED
+    assert engine.state.positions["BTC/USDT"].quantity == Decimal("0.01")
+
+
+@pytest.mark.asyncio
+async def test_export_journal_bytes_is_stable_json():
+    engine = PaperTradingEngine()
+    engine.set_mark_price("BTC/USDT", Decimal("100000"))
+    await engine.submit(_req(idempotency_key="jrnl"), _risk_ok())
+    raw = engine.export_journal_bytes()
+    payload = json.loads(raw.decode("utf-8"))
+    assert isinstance(payload, dict)
+    assert "FILL" in payload["journal_events"]
+    assert payload["cash"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_always_evaluates_risk_before_backend():
+    """Gateway must call risk.evaluate before any backend submit."""
+    calls: list[str] = []
+
+    class TrackingRisk(RiskEngine):
+        def evaluate(self, request, context):  # type: ignore[override]
+            calls.append("risk")
+            return super().evaluate(request, context)
+
+    class TrackingPaper(PaperTradingEngine):
+        async def submit(self, request, risk):  # type: ignore[override]
+            calls.append("backend")
+            return await super().submit(request, risk)
+
+    paper = TrackingPaper()
+    paper.set_mark_price("BTC/USDT", Decimal("100000"))
+    gateway = OrderGateway(
+        paper,
+        risk_engine=TrackingRisk(
+            Settings(
+                max_risk_per_trade=Decimal("0.5"),
+                max_position_exposure=Decimal("0.9"),
+                max_portfolio_exposure=Decimal("0.9"),
+                _env_file=None,
+            ),
+            RiskEngineState(),
+        ),
+    )
+    order = await gateway.submit(
+        _req(quantity=Decimal("0.01"), idempotency_key="order-path"),
+        RiskContext(
+            portfolio=PortfolioState(
+                cash_balance=Decimal("10000"),
+                equity=Decimal("10000"),
+                peak_equity=Decimal("10000"),
+            ),
+            mark_price=Decimal("100000"),
+            market_data_ts=__import__("app.core.time", fromlist=["utc_now"]).utc_now(),
+        ),
+    )
+    assert calls == ["risk", "backend"]
+    assert order.risk_decision in (RiskDecision.APPROVED, RiskDecision.REDUCED)
+    assert order.risk_reason_code is not None
