@@ -16,6 +16,7 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 - Frontend dev server: `npm --prefix frontend run dev` (`http://localhost:3000`). It reaches the backend at `ATLAS_BACKEND_URL` (defaults to `http://127.0.0.1:8000`).
 - `.env` is copied from `.env.example`; defaults are paper-safe and require **no secrets** to run. `TRADING_MODE` defaults to `paper` — never weaken this or the live-trading gate (see `.cursor/rules/atlas.mdc`).
 - Database is **SQLite by default** (`sqlite+aiosqlite:///./atlas.db`); run `alembic upgrade head` to create tables. `REDIS_URL` is configured but **Redis is not required** — nothing connects to it at startup.
+- The dashboard is behind a **login gate** (Next.js middleware). Any unauthenticated page request redirects to `/login`, and `/api/*` proxy calls return `401` until signed in. Default demo credentials are `admin` / `atlas` (override via `ATLAS_DASHBOARD_USER` / `ATLAS_DASHBOARD_PASSWORD`; the session cookie is signed with `ATLAS_AUTH_SECRET`). Auth lives entirely in the frontend (`frontend/middleware.ts`, `frontend/lib/auth.ts`, `frontend/app/api/auth/*`) — the FastAPI backend is unauthenticated.
 
 ### Test / lint
 
