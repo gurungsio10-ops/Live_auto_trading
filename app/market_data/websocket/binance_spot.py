@@ -77,6 +77,10 @@ class BinanceSpotTestnetWebSocket:
     def __post_init__(self) -> None:
         settings = get_settings()
         url = build_testnet_stream_url(self.symbols)
+        if self.transport is None:
+            from app.market_data.websocket.transport import RealWebSocketTransport
+
+            self.transport = RealWebSocketTransport()
         self.client = WebSocketMarketDataClient(
             url=url,
             symbols=self.symbols,
@@ -84,6 +88,8 @@ class BinanceSpotTestnetWebSocket:
             on_tick=self._handle_raw,
             transport=self.transport,
             rest_fallback=self.rest_fallback,
+            # Stream list is encoded in the URL — do not send custom subscribe ops.
+            auto_subscribe=False,
         )
         self.metrics = self.client.metrics
 

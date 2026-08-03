@@ -24,6 +24,12 @@ class TestnetCycleBody(BaseModel):
         default=True,
         description="When true, run one offline-engineered candle cycle (no network).",
     )
+    lookback: int = Field(
+        default=60,
+        ge=30,
+        le=500,
+        description="REST kline lookback when use_sample_candles=false.",
+    )
 
 
 class KillBody(BaseModel):
@@ -114,34 +120,63 @@ async def run_testnet_cycle(body: TestnetCycleBody) -> dict[str, Any]:
     if settings.trading_mode == "live" or settings.exchange_env == "live":
         raise LiveTradingDisabledError("Live trading disabled")
 
+    if not body.use_sample_candles:
+        if settings.exchange_env != "testnet":
+            raise HTTPException(
+                status_code=400,
+                detail="use_sample_candles=false requires EXCHANGE_ENV=testnet",
+            )
+        if not settings.has_exchange_credentials:
+            raise HTTPException(
+                status_code=400,
+                detail="Binance Spot Testnet credentials required for REST cycle",
+            )
+
     runtime = tn.get_testnet_runtime()
     if runtime is None:
         runtime = tn.init_testnet_runtime(
             settings=settings, symbol=body.symbol, strategy_id="ema_crossover"
         )
-        runtime._ensure_backend()
 
     if body.use_sample_candles:
         from app.services.sample_market import build_ema_crossover_candles
 
+        # Paper sample cycles use the paper backend; testnet sample cycles still
+        # need credentials to construct the Spot Testnet broker.
+        if settings.exchange_env == "testnet" and not settings.has_exchange_credentials:
+            raise HTTPException(
+                status_code=400,
+                detail="Binance Spot Testnet credentials required when EXCHANGE_ENV=testnet",
+            )
+        runtime._ensure_backend()
         candles = build_ema_crossover_candles(
             symbol=body.symbol, interval=body.timeframe, force_buy_on_last=True
         )
         # Warm window without trading intermediate bars
         runtime._window = list(candles[:-1])
         result = await runtime.process_candle(candles[-1])
+        simulated = True
     else:
-        raise HTTPException(
-            status_code=501,
-            detail="Live stream cycle requires an attached WebSocket transport",
+        # Live REST kline cycle (Spot Testnet sandbox via ccxt). Requires network.
+        runtime._ensure_backend()
+        result = await runtime.run_rest_cycle(
+            symbol=body.symbol,
+            timeframe=body.timeframe,
+            lookback=body.lookback,
         )
+        simulated = False
 
     snap = runtime.dashboard_snapshot()
     # Mirror into paper session for existing dashboard widgets when in paper env.
     if settings.exchange_env == "paper":
         session = get_paper_session()
         session.signal_log.extend(runtime._signals[-1:])
-    return {"cycle": result, "dashboard": snap, "simulated_testnet": True}
+    return {
+        "cycle": result,
+        "dashboard": snap,
+        "simulated_testnet": simulated,
+        "data_source": "sample_candles" if simulated else "rest_klines",
+    }
 
 
 @router.post("/testnet/kill-switch")

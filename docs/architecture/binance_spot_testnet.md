@@ -40,22 +40,53 @@ Create keys at: https://testnet.binance.vision/
 
 ## API
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /api/v1/testnet/status` | Connection + runtime snapshot |
-| `GET /api/v1/testnet/diagnostics` | DB/Redis/WS/risk/portfolio probes |
-| `GET /api/v1/testnet/dashboard` | Live testnet dashboard payload |
-| `POST /api/v1/testnet/cycle/run` | One deterministic cycle (sample candles by default) |
-| `POST /api/v1/testnet/runtime/start` | Start runtime (admin token) |
-| `POST /api/v1/testnet/kill-switch` | Kill switch (admin token) |
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /api/v1/testnet/status` | none | Connection + runtime snapshot |
+| `GET /api/v1/testnet/diagnostics` | none | DB/Redis/WS/risk/portfolio probes |
+| `GET /api/v1/testnet/dashboard` | none | Live testnet dashboard payload |
+| `POST /api/v1/testnet/cycle/run` | none | One cycle (sample or REST klines) |
+| `POST /api/v1/testnet/runtime/start` | `X-Admin-Token` | Start WS + reconciler + hydrate |
+| `POST /api/v1/testnet/kill-switch` | `X-Admin-Token` | Kill switch |
+
+### `POST /api/v1/testnet/cycle/run` body
+
+```json
+{
+  "symbol": "BTC/USDT",
+  "timeframe": "1m",
+  "use_sample_candles": true,
+  "lookback": 60
+}
+```
+
+- `use_sample_candles=true` — offline EMA fixture (CI/demo).
+- `use_sample_candles=false` — REST OHLCV from Spot Testnet, then one strategy cycle. Requires `EXCHANGE_ENV=testnet` + credentials.
+
+Response includes `data_source` (`sample_candles` | `rest_klines`) and `dashboard` snapshot.
+
+## WebSocket
+
+`RealWebSocketTransport` (`websockets`) connects to
+`wss://stream.testnet.binance.vision/stream?streams=...@kline_1m/...@trade`.
+
+Features: reconnect, heartbeat/ping, stale watchdog, exponential backoff, trade/kline dedup, REST gap recovery on disconnect.
 
 ## Factory
 
 `app/execution/factory.py` → `build_execution_backend(settings)`
 
-## Reconciliation
+## Reconciliation & restart
 
 `PortfolioReconciler` every `TESTNET_RECONCILE_SECONDS` compares exchange balances vs local ledger, repairs from exchange, alerts on mismatch.
+
+On runtime start, balances and open orders are hydrated from the exchange so restarts do not invent divergent spot positions.
+
+## Docs
+
+- Config: `docs/operations/testnet_configuration.md`
+- Deploy: `docs/operations/testnet_deployment.md`
+- Troubleshoot: `docs/operations/testnet_troubleshooting.md`
 
 ## Safety
 

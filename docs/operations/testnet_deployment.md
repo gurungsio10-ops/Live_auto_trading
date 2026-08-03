@@ -35,21 +35,26 @@ ADMIN_API_TOKEN=... ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm --prefix fronten
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/testnet/status | jq
 curl -s http://127.0.0.1:8000/api/v1/testnet/diagnostics | jq
+
+# Offline deterministic cycle (no exchange network required for market data)
 curl -s -X POST http://127.0.0.1:8000/api/v1/testnet/cycle/run \
   -H 'Content-Type: application/json' \
   -d '{"use_sample_candles":true}' | jq
+
+# One-shot cycle from Spot Testnet REST klines
+curl -s -X POST http://127.0.0.1:8000/api/v1/testnet/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"use_sample_candles":false,"lookback":60}' | jq
+
+# Continuous WS + reconciler (admin token)
+curl -s -X POST http://127.0.0.1:8000/api/v1/testnet/runtime/start \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" | jq
 ```
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| `ConfigurationError` credentials | Set Spot **Testnet** keys (not production) |
-| `LiveTradingDisabledError` | Set `EXCHANGE_ENV=testnet` and `TRADING_MODE=paper` |
-| Orders rejected precision | Symbol filters loaded from exchange; check min notional |
-| WS not connected | Attach real transport or use sample-candle cycles |
-| Portfolio mismatch alerts | Expected on first reconcile; auto-repair from exchange |
+See `docs/operations/testnet_troubleshooting.md` and `docs/operations/testnet_configuration.md`.
 
-## Soak
+## Soak / restart
 
-For continuous operation, attach a production WS transport to `BinanceSpotTestnetWebSocket` and keep reconciler running. Restart-safe state uses Postgres journal tables after `alembic upgrade head`.
+`POST /api/v1/testnet/runtime/start` connects `RealWebSocketTransport` to Spot Testnet streams, starts the 30s portfolio reconciler, and **hydrates balances/open orders from the exchange** so a process restart re-syncs ledger state. Keep `docker compose` Postgres/Redis up; run `alembic upgrade head` for journal tables.

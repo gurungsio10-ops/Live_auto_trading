@@ -38,7 +38,10 @@ jobs:
           # Keep tests on an isolated in-memory DB even if job-level DATABASE_URL is set.
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
         run: |
-          pytest --cov=app.risk --cov=app.execution --cov=app.portfolio --cov=app.strategies \
+          pytest \
+            --cov=app.risk --cov=app.execution --cov=app.portfolio --cov=app.strategies \
+            --cov=app.services.testnet_runtime --cov=app.services.portfolio_reconciler \
+            --cov=app.market_data.websocket --cov=app.api.testnet \
             --cov-report=term-missing --cov-fail-under=70
       - name: Alembic upgrade
         env:

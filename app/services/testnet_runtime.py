@@ -87,6 +87,7 @@ class TestnetRuntime:
     journal: JournalStore | None = None
     transport: Any | None = None  # injectable WS transport for tests
     exchange_api: Any | None = None  # injectable REST api for tests
+    enable_websocket: bool = True  # set False in offline unit tests
 
     def __post_init__(self) -> None:
         if self.settings.exchange_env == "live" or self.settings.trading_mode == "live":
@@ -146,6 +147,9 @@ class TestnetRuntime:
         self.health.risk_engine_ok = True
         self.health.strategy_heartbeat_ok = True
 
+        # Restart-safe hydrate: exchange balances/orders are source of truth on testnet.
+        await self._hydrate_from_exchange()
+
         if hasattr(self._backend, "fetch_balances"):
             self.reconciler = PortfolioReconciler(
                 exchange=self._backend,  # type: ignore[arg-type]
@@ -155,22 +159,22 @@ class TestnetRuntime:
             )
             await self.reconciler.start()
 
-        self.ws = BinanceSpotTestnetWebSocket(
-            symbols=[self.symbol],
-            on_candle=self._ws_candle_handler,
-            on_trade=self.on_trade_tick,
-            transport=self.transport,
-            rest_fallback=self._rest_fallback,
-            stale_seconds=self.settings.market_data_stale_seconds,
-        )
-        if self.transport is not None:
+        if self.enable_websocket:
+            self.ws = BinanceSpotTestnetWebSocket(
+                symbols=[self.symbol],
+                on_candle=self._ws_candle_handler,
+                on_trade=self.on_trade_tick,
+                transport=self.transport,
+                rest_fallback=self._rest_fallback,
+                stale_seconds=self.settings.market_data_stale_seconds,
+            )
+            # RealWebSocketTransport is attached by default when transport is None.
             await self.ws.start()
             self.health.websocket_connected = True
         else:
-            # No real transport in-process unless injected / production wiring attaches one.
             logger.info(
-                "testnet_ws_deferred",
-                extra={"detail": "start with injectable transport or attach real WS"},
+                "testnet_ws_disabled",
+                extra={"detail": "enable_websocket=False (offline/test mode)"},
             )
         logger.info(
             "testnet_runtime_started",
@@ -180,6 +184,70 @@ class TestnetRuntime:
                 "exchange_env": self.settings.exchange_env,
             },
         )
+
+    async def _hydrate_from_exchange(self) -> None:
+        """Seed local portfolio + open orders from the exchange after restart."""
+        backend = self._backend
+        if backend is None or not hasattr(backend, "fetch_balances"):
+            return
+        try:
+            balances = await backend.fetch_balances()
+            self.local_portfolio.apply_exchange_balances(balances)
+            # Spot positions derived from non-quote base balances.
+            positions: dict[str, Decimal] = {}
+            for bal in balances:
+                if bal.asset in {"USDT", "USD", "BUSD", "USDC"}:
+                    continue
+                total = bal.total if bal.total is not None else bal.free + bal.locked
+                if total <= 0:
+                    continue
+                symbol = f"{bal.asset}/USDT"
+                if symbol == self.symbol or symbol in self.settings.supported_symbols:
+                    positions[symbol] = total
+            self.local_portfolio.apply_exchange_positions(positions)
+            if hasattr(backend, "fetch_open_orders"):
+                open_orders = await backend.fetch_open_orders(self.symbol)
+                # Replace process-local open cache with exchange open set.
+                kept = [
+                    o
+                    for o in self._orders
+                    if o.status
+                    not in {
+                        OrderStatus.SUBMITTED,
+                        OrderStatus.PARTIALLY_FILLED,
+                        OrderStatus.APPROVED,
+                    }
+                ]
+                self._orders = kept + list(open_orders)
+            logger.info(
+                "testnet_hydrated_from_exchange",
+                extra={
+                    "balances": len(balances),
+                    "positions": len(positions),
+                    "open_orders": len(
+                        [
+                            o
+                            for o in self._orders
+                            if o.status
+                            in {
+                                OrderStatus.SUBMITTED,
+                                OrderStatus.PARTIALLY_FILLED,
+                                OrderStatus.APPROVED,
+                            }
+                        ]
+                    ),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "testnet_hydrate_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            await self.monitoring.alert(
+                "EXCHANGE_UNAVAILABLE",
+                f"Hydrate from exchange failed: {type(exc).__name__}",
+                {"symbol": self.symbol},
+            )
 
     async def stop(self) -> None:
         self._running = False
@@ -197,7 +265,100 @@ class TestnetRuntime:
             {"symbol": symbol},
         )
         self.health.websocket_connected = False
-        return {"symbol": symbol, "fallback": True, "ts": utc_now().isoformat()}
+        # Gap recovery: pull recent closed candles via REST and process unseen ones.
+        try:
+            candles = await self.fetch_rest_candles(
+                symbol=symbol, timeframe=self.timeframe, limit=5
+            )
+            processed = 0
+            for candle in candles:
+                key = (candle.symbol, candle.open_time.isoformat())
+                if key in self._seen_candle_keys:
+                    continue
+                await self.on_closed_candle(candle)
+                processed += 1
+            return {
+                "symbol": symbol,
+                "fallback": True,
+                "candles_fetched": len(candles),
+                "candles_processed": processed,
+                "ts": utc_now().isoformat(),
+            }
+        except Exception as exc:
+            logger.warning(
+                "testnet_rest_fallback_failed",
+                extra={"symbol": symbol, "error_type": type(exc).__name__},
+            )
+            return {
+                "symbol": symbol,
+                "fallback": True,
+                "error": type(exc).__name__,
+                "ts": utc_now().isoformat(),
+            }
+
+    async def fetch_rest_candles(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        limit: int = 60,
+    ) -> list[Candle]:
+        """Fetch closed OHLCV candles from Binance Spot Testnet REST (ccxt sandbox)."""
+        from app.market_data.providers.binance import BinanceProvider
+
+        symbol = symbol or self.symbol
+        timeframe = timeframe or self.timeframe
+        provider = BinanceProvider(
+            sandbox=self.settings.exchange_env == "testnet",
+            api_key=(
+                self.settings.exchange_api_key.get_secret_value()
+                if self.settings.exchange_api_key
+                else None
+            ),
+            api_secret=(
+                self.settings.exchange_api_secret.get_secret_value()
+                if self.settings.exchange_api_secret
+                else None
+            ),
+        )
+        try:
+            candles = list(await provider.fetch_ohlcv(symbol, timeframe, limit=limit))
+            return candles
+        finally:
+            await provider.close()
+
+    async def run_rest_cycle(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        lookback: int = 60,
+    ) -> dict[str, Any]:
+        """
+        One-shot live cycle using REST klines (no sample candles).
+
+        Warms the indicator window from historical bars, then processes the
+        newest closed candle through strategy → risk → execution.
+        """
+        symbol = symbol or self.symbol
+        timeframe = timeframe or self.timeframe
+        self.symbol = symbol
+        self.timeframe = timeframe
+        candles = await self.fetch_rest_candles(
+            symbol=symbol, timeframe=timeframe, limit=lookback
+        )
+        if len(candles) < 25:
+            return {
+                "accepted": False,
+                "reason": "INSUFFICIENT_REST_CANDLES",
+                "candles": len(candles),
+            }
+        # Warm window without trading intermediate bars; act on the latest close.
+        self._window = list(candles[:-1])
+        # Allow re-processing the tip after restart (clear only that key).
+        tip = candles[-1]
+        self._seen_candle_keys.discard((tip.symbol, tip.open_time.isoformat()))
+        return await self.process_candle(tip)
 
     async def on_trade_tick(self, msg: dict[str, Any]) -> None:
         self.health.last_market_data_at = utc_now()

@@ -28,7 +28,7 @@ All nine conditions must be true simultaneously for a live order to submit:
 | 5 | Backtesting Engine | **done** | Phase 4 |
 | 6 | Risk Engine | **done** | Phase 5 |
 | 7 | Paper Trading Engine | **done** | Phase 6 |
-| 8 | Live Market Data (WebSocket) | **partial** | Phase 7 |
+| 8 | Live Market Data (WebSocket) | **done** (Spot Testnet WS + RealWebSocketTransport) | Phase 7 |
 | 9 | Portfolio and Journal | **done** | Phase 8 |
 | 10 | Monitoring | **partial** | Phase 9 |
 | 11 | Dashboard (Next.js) | **done** | Phase 10 |
@@ -40,34 +40,32 @@ All nine conditions must be true simultaneously for a live order to submit:
 | 16 | Full audit and end-to-end paper-trading validation | **done** (paper slice) | Phase 15 |
 | 17 | Paper vertical slice hardening (`/api/v1`, EMA 9/21, CI) | **done** (paper only) | Phase 16 |
 
-## Truthful status corrections (Phase 16 audit)
+## Truthful status corrections
 
-Statuses were revised to match the actual implementation (see
-`docs/audit/phase16_repository_audit.md`):
+Statuses track the actual implementation (see also
+`docs/audit/phase16_repository_audit.md` for the Phase 16 paper baseline):
 
-- **Phase 8 → partial:** `app/market_data/websocket/client.py` is a fully-tested
-  *generic* WS consumer, but there is **no Binance stream adapter/URL wired**; the
-  running app's live feed uses REST polling (via the CLI), not a live WS to a real
-  exchange. Stale detection is passive (does not trigger reconnect).
-- **Phase 10 → partial:** `app/monitoring/health.py` readiness is a flag aggregator
-  (no live DB/Redis/market-data probes) and `WebhookAlertChannel` is an intentional
-  no-op.
+- **Phase 8 → done (Sprint 1):** `BinanceSpotTestnetWebSocket` + `RealWebSocketTransport`
+  stream Spot Testnet kline/trade with reconnect, stale watchdog, dedup, and REST
+  gap recovery. Public/production Binance live money feeds remain out of scope.
+- **Phase 10 → partial:** readiness probes exist under `/api/v1/testnet/diagnostics`;
+  some legacy readiness paths remain flag aggregators.
 - **Phase 13 → partial:** `app/news/sentiment.py` is implemented and tested but is
   **not wired** into `RiskEngine`.
-- **Phase 13.5 → partial:** `app/execution/exchange/testnet.py` is a complete adapter
-  but **unwired** (referenced only from tests); no factory instantiates it in app code.
+- **Phase 13.5 → done (Sprint 1):** factory selects paper/testnet; live raises
+  `LiveTradingDisabledError`. Spot Testnet broker, runtime cycle, reconciler,
+  dashboard APIs, and hydrate-on-start are wired. Live money trading stays disabled.
 
-## Phase 16 acceptance criteria — current state
+## Phase 16 / Sprint 1 acceptance — current state
 
-Met: backend installs; `pytest` green; migrations `0001..0004` apply; offline
-replay + `/api/v1/paper/cycle/run` complete risk-gated paper fills; idempotent
-cycle keys; kill switch + admin token; live execution raises
-`LiveTradingDisabledError`; CI workflow present; frontend lint/typecheck/build;
-docs under `docs/architecture/` and `docs/operations/`.
+Met: backend installs; `pytest` green; migrations apply; paper cycle + Spot Testnet
+pipeline (sample + REST cycle + WS runtime); kill switch; live execution raises
+`LiveTradingDisabledError`; CI coverage includes testnet/WS modules; frontend
+lint/typecheck/build; docs under `docs/architecture/` and `docs/operations/`.
 
-Still open (not live-ready): live order adapter, WS Binance adapter, durable
-portfolio sync on every dashboard tick, reconciling legacy `/api/*` placeholders,
-testnet soak. Live readiness checklist remains **unchecked**.
+Still open (not live-ready): live order adapter, multi-day soak proof with real
+testnet keys in CI, full journal-session wiring on every dashboard tick. Live
+readiness checklist remains **unchecked**.
 
 ## Notes
 
