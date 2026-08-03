@@ -547,3 +547,150 @@ def test_singleton_helpers():
     assert a is b
     c = reset_risk_engine()
     assert c is not a
+
+
+def test_missing_market_data_ts_skips_stale_check():
+    engine = RiskEngine(_settings())
+    result = engine.evaluate(
+        _request(idempotency_key="no-md-ts"),
+        _ctx(market_data_ts=None),
+    )
+    assert result.decision == RiskDecision.APPROVED
+    assert "market_data_age_seconds" not in result.checks
+
+
+def _loose_symbol() -> SymbolInfo:
+    return SymbolInfo(
+        symbol="BTC/USDT",
+        base="BTC",
+        quote="USDT",
+        price_precision=2,
+        quantity_precision=8,
+        min_quantity=Decimal("0.00000001"),
+        min_notional=Decimal("0.01"),
+        tick_size=Decimal("0.01"),
+        step_size=Decimal("0.00000001"),
+    )
+
+
+def test_max_risk_per_trade_hard_reject_when_budget_too_small():
+    """Wide stop + tiny risk budget → max_qty_by_risk rounds to zero."""
+    engine = RiskEngine(
+        _settings(
+            max_risk_per_trade=Decimal("0.01"),
+            max_position_exposure=Decimal("1"),
+            max_portfolio_exposure=Decimal("1"),
+            min_order_notional=Decimal("0.01"),
+        )
+    )
+    result = engine.evaluate(
+        _request(
+            quantity=Decimal("1"),
+            stop_loss=Decimal("1"),
+            idempotency_key="risk-hard",
+        ),
+        _ctx(
+            portfolio=_portfolio(
+                equity=Decimal("0.001"),
+                cash_balance=Decimal("0.001"),
+                peak_equity=Decimal("0.001"),
+            ),
+            mark_price=Decimal("100000"),
+            symbol_info=_loose_symbol(),
+        ),
+    )
+    assert result.decision == RiskDecision.REJECTED
+    assert result.reason_code == RiskReasonCode.MAX_RISK_PER_TRADE
+    assert result.approved_quantity is None
+
+
+def test_max_position_exposure_hard_reject_tiny_equity():
+    engine = RiskEngine(
+        _settings(
+            max_risk_per_trade=Decimal("1"),
+            max_position_exposure=Decimal("0.01"),
+            max_portfolio_exposure=Decimal("1"),
+            min_order_notional=Decimal("0.01"),
+        )
+    )
+    result = engine.evaluate(
+        _request(
+            quantity=Decimal("1"),
+            stop_loss=None,
+            idempotency_key="pos-hard",
+        ),
+        _ctx(
+            portfolio=_portfolio(
+                equity=Decimal("0.001"),
+                cash_balance=Decimal("0.001"),
+                peak_equity=Decimal("0.001"),
+            ),
+            mark_price=Decimal("100000"),
+            symbol_info=_loose_symbol(),
+        ),
+    )
+    assert result.decision == RiskDecision.REJECTED
+    assert result.reason_code == RiskReasonCode.MAX_POSITION_EXPOSURE
+
+
+def test_portfolio_exposure_reduces_when_partial_room():
+    positions = [
+        Position(
+            symbol="ETH/USDT",
+            quantity=Decimal("0.07"),
+            entry_price=Decimal("100000"),
+            current_price=Decimal("100000"),
+            unrealized_pnl=Decimal("0"),
+            opened_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+    ]
+    # Existing notional 7000 / equity 10000 = 0.70; max portfolio 0.80 → room 1000
+    engine = RiskEngine(
+        _settings(
+            max_portfolio_exposure=Decimal("0.80"),
+            max_position_exposure=Decimal("0.90"),
+            max_risk_per_trade=Decimal("0.50"),
+            max_open_positions=10,
+        )
+    )
+    result = engine.evaluate(
+        _request(
+            quantity=Decimal("0.05"),
+            stop_loss=None,
+            idempotency_key="port-reduce",
+        ),
+        _ctx(
+            portfolio=_portfolio(open_positions=positions),
+            mark_price=Decimal("100000"),
+        ),
+    )
+    assert result.decision == RiskDecision.REDUCED
+    assert result.reason_code == RiskReasonCode.SIZE_REDUCED_BY_RISK
+    assert result.approved_quantity is not None
+    assert result.approved_quantity < Decimal("0.05")
+    assert result.approved_quantity * Decimal("100000") <= Decimal("1000.01")
+
+
+def test_rejected_evaluations_never_omit_reason_code():
+    cases = [
+        (
+            RiskEngine(_settings(kill_switch_enabled=True)),
+            _request(idempotency_key="r1"),
+            _ctx(kill_switch_enabled=True),
+        ),
+        (
+            RiskEngine(_settings()),
+            _request(quantity=Decimal("0"), idempotency_key="r2"),
+            _ctx(),
+        ),
+        (
+            RiskEngine(_settings(), RiskEngineState(market_data_healthy=False)),
+            _request(idempotency_key="r3"),
+            _ctx(),
+        ),
+    ]
+    for engine, req, ctx in cases:
+        result = engine.evaluate(req, ctx)
+        assert result.decision in {RiskDecision.REJECTED, RiskDecision.HALTED}
+        assert result.reason_code is not None
+        assert result.approved_quantity is None
