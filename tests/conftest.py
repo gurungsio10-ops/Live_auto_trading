@@ -16,19 +16,13 @@ os.environ.setdefault("KILL_SWITCH_ENABLED", "false")
 os.environ.setdefault("EXCHANGE_ENV", "paper")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-import app.journal.store
+import app.auth.store  # noqa: F401 — register users ORM table
+import app.journal.store  # noqa: F401 — register journal ORM tables
 import app.models.database.market  # noqa: F401
 from app.core.config import get_settings
 from app.core.time import from_unix_ms
 from app.db.base import Base
 from app.models.domain.market import Candle
-<<<<<<< HEAD
-from app.core.time import from_unix_ms
-import app.models.database.market  # noqa: F401
-import app.journal.store  # noqa: F401 — register journal ORM tables
-import app.auth.store  # noqa: F401 — register users ORM table
-=======
->>>>>>> origin/main
 
 
 @pytest.fixture(autouse=True)
