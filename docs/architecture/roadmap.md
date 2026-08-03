@@ -34,7 +34,7 @@ All nine conditions must be true simultaneously for a live order to submit:
 | 11 | Dashboard (Next.js) | **done** | Phase 10 |
 | 12 | AI Analysis Layer (advisory only) | **done** | Phase 11 |
 | 13 | News Sentiment | **partial** | Phase 12 |
-| 13.5 | Testnet Execution | **partial** | Phase 13 |
+| 13.5 | Testnet Execution | **done** (Spot Testnet pipeline; live still disabled) | Phase 13 |
 | 14 | Live Trading Preparation | **done** (gates prepared; no live backend wired) | Phase 13.5 |
 | 15 | Futures and Leverage | **done** (primitives; enable only after live-spot soak) | Phase 14 |
 | 16 | Full audit and end-to-end paper-trading validation | **done** (paper slice) | Phase 15 |
