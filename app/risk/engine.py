@@ -379,7 +379,9 @@ class RiskEngine:
                 "Reconciliation unhealthy",
                 checks,
             )
-        if not context.live_approval_valid:
+        token = self.settings.live_approval_token
+        token_configured = token is not None and bool(token.get_secret_value().strip())
+        if not context.live_approval_valid or not token_configured:
             return self._reject(
                 RiskReasonCode.INVALID_LIVE_APPROVAL,
                 "Live approval token invalid",

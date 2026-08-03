@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +57,22 @@ class LiveTradingGate:
         self.settings = settings or get_settings()
         self.state = state or LiveReadinessState()
 
+    def has_configured_approval_token(self) -> bool:
+        token = self.settings.live_approval_token
+        if token is None:
+            return False
+        return bool(token.get_secret_value().strip())
+
+    def validate_approval_token(self, presented: str) -> bool:
+        """Constant-time compare of a presented token against Settings."""
+        token = self.settings.live_approval_token
+        if token is None or not presented:
+            return False
+        expected = token.get_secret_value()
+        if not expected.strip():
+            return False
+        return secrets.compare_digest(presented, expected)
+
     def evaluate(self) -> LiveGateResult:
         checks = {
             "trading_mode_live": self.settings.trading_mode == "live",
@@ -66,7 +83,9 @@ class LiveTradingGate:
             "market_data_healthy": self.state.market_data_healthy,
             "database_healthy": self.state.database_healthy,
             "reconciliation_healthy": self.state.reconciliation_healthy,
-            "valid_live_approval_token": self.state.live_approval_valid,
+            "valid_live_approval_token": (
+                self.state.live_approval_valid and self.has_configured_approval_token()
+            ),
         }
         assert set(checks) == set(LIVE_CONDITIONS)
         failed = [name for name, ok in checks.items() if not ok]

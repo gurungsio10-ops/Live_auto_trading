@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.time import utc_now
@@ -34,6 +35,16 @@ def _settings(**overrides) -> Settings:
     )
     base.update(overrides)
     return Settings(**base)
+
+
+def _live_ready_settings(**overrides) -> Settings:
+    """Settings with live mode + approval token configured (still needs context flags)."""
+    return _settings(
+        trading_mode="live",
+        live_trading_enabled=True,
+        live_approval_token=SecretStr("approve-live-token-1234567890"),
+        **overrides,
+    )
 
 
 def _portfolio(**overrides) -> PortfolioState:
@@ -317,7 +328,7 @@ def test_live_trading_disabled():
 
 
 def test_invalid_credentials():
-    engine = RiskEngine(_settings(trading_mode="live", live_trading_enabled=True))
+    engine = RiskEngine(_live_ready_settings())
     result = engine.evaluate(
         _request(idempotency_key="creds"),
         _ctx(
@@ -331,7 +342,7 @@ def test_invalid_credentials():
 
 
 def test_invalid_live_approval():
-    engine = RiskEngine(_settings(trading_mode="live", live_trading_enabled=True))
+    engine = RiskEngine(_live_ready_settings())
     result = engine.evaluate(
         _request(idempotency_key="approval"),
         _ctx(
@@ -449,7 +460,7 @@ def test_close_circuit_breaker():
 
 
 def test_live_gating_all_pass():
-    engine = RiskEngine(_settings(trading_mode="live", live_trading_enabled=True))
+    engine = RiskEngine(_live_ready_settings())
     result = engine.evaluate(
         _request(idempotency_key="liveok"),
         _ctx(
@@ -465,7 +476,7 @@ def test_live_gating_all_pass():
 
 
 def test_live_kill_switch_in_gating():
-    engine = RiskEngine(_settings(trading_mode="live", live_trading_enabled=True))
+    engine = RiskEngine(_live_ready_settings())
     result = engine.evaluate(
         _request(idempotency_key="livekill"),
         _ctx(
@@ -492,7 +503,7 @@ def test_live_gating_health_flags(flag, code):
     state = RiskEngineState(**{flag: False})
     # risk_engine_healthy False is caught before live gating — still assert code
     engine = RiskEngine(
-        _settings(trading_mode="live", live_trading_enabled=True),
+        _live_ready_settings(),
         state=state,
     )
     result = engine.evaluate(

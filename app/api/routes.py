@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.ai import TradingAnalyst
 from app.core.config import get_settings
 from app.core.security import redact_settings
-from app.execution.live_gate import LiveTradingGate
+from app.execution.live_gate import LIVE_CONDITIONS, LiveTradingGate
 from app.monitoring import HealthRegistry, MonitoringService
 from app.strategies.registry import list_strategies
 
@@ -125,6 +125,8 @@ async def live_gate_status() -> dict:
         "allowed": result.allowed,
         "failed_conditions": result.failed_conditions,
         "reason_code": result.reason_code.value if result.reason_code else None,
+        "conditions": list(LIVE_CONDITIONS),
+        "details": result.details,
     }
 
 

@@ -155,6 +155,7 @@ def _live_settings(**overrides: object) -> Settings:
         kill_switch_enabled=False,
         exchange_api_key=SecretStr("key-123456789012345678901234"),
         exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+        live_approval_token=SecretStr("approve-live-token-1234567890"),
         _env_file=None,
     )
     data.update(overrides)
