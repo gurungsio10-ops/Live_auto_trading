@@ -128,3 +128,85 @@ class PortfolioState(BaseModel):
     drawdown: Decimal = Decimal("0")
     open_positions: list[Position] = Field(default_factory=list)
     consecutive_losses: int = 0
+    fees_paid: Decimal = Decimal("0")
+    exposure: Decimal = Decimal("0")
+    asset_balances: dict[str, Decimal] = Field(default_factory=dict)
+    as_of: datetime = Field(default_factory=utc_now)
+
+
+class Balance(BaseModel):
+    """Single asset balance (quote or base)."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    asset: str
+    free: Decimal
+    locked: Decimal = Decimal("0")
+    total: Decimal | None = None
+
+    @property
+    def available(self) -> Decimal:
+        return self.free
+
+
+class MarketSnapshot(BaseModel):
+    """Point-in-time market view used by risk / dashboard freshness checks."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    symbol: str
+    timeframe: str
+    last_price: Decimal
+    candle_open_time: datetime
+    received_at: datetime = Field(default_factory=utc_now)
+    is_stale: bool = False
+    source: str = "unknown"
+
+
+class StrategyRun(BaseModel):
+    """One strategy evaluation against a closed candle window."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: str
+    strategy_name: str
+    strategy_version: str
+    symbol: str
+    timeframe: str
+    candle_open_time: datetime
+    correlation_id: str
+    direction: SignalDirection
+    created_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TradeJournalEntry(BaseModel):
+    """Append-only application-layer journal record."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: str
+    event_type: str
+    severity: str = "info"
+    message: str
+    correlation_id: str | None = None
+    strategy_run_id: str | None = None
+    order_id: str | None = None
+    idempotency_key: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class SystemHealth(BaseModel):
+    """API-facing system health snapshot (paper-safe; no secrets)."""
+
+    status: str
+    trading_mode: str
+    kill_switch_enabled: bool
+    live_trading_enabled: bool
+    exchange_env: str
+    database_ok: bool = True
+    market_data_ok: bool = True
+    risk_engine_ok: bool = True
+    detail: str = ""
+    checked_at: datetime = Field(default_factory=utc_now)

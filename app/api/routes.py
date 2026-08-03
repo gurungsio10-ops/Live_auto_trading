@@ -142,6 +142,6 @@ async def ai_summarize(events: list[dict[str, Any]]) -> dict:
 async def equity_curve() -> list[dict]:
     # Placeholder series for dashboard wiring
     return [
-        {"t": f"2024-01-0{i+1}", "equity": str(Decimal("10000") + i * 10)}
+        {"t": f"2024-01-0{i + 1}", "equity": str(Decimal("10000") + i * 10)}
         for i in range(5)
     ]

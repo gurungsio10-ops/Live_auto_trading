@@ -1,9 +1,20 @@
 "use client";
 
 import { ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
+import { SessionBar } from "./SessionBar";
+
+// Routes that render without the dashboard chrome (sidebar/header).
+const BARE_ROUTES = ["/login"];
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+
+  if (BARE_ROUTES.includes(pathname)) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="flex min-h-screen terminal-grid">
       <Sidebar />
@@ -17,10 +28,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               Dense · dark · risk-first · paper by default
             </p>
           </div>
-          <div className="hidden text-right text-[10px] text-terminal-dim font-mono sm:block">
-            <p>UTC clock · risk engine gated</p>
-            <p>No client-side secrets</p>
-          </div>
+          <SessionBar />
         </header>
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </div>

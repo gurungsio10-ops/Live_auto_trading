@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.strategies.base import Strategy
+from app.strategies.ema_crossover import EMACrossoverStrategy
 from app.strategies.ema_trend import EMATrendStrategy
 
 _REGISTRY: dict[str, Strategy] = {}
@@ -23,6 +24,8 @@ def list_strategies() -> list[Strategy]:
 
 
 def bootstrap_default_strategies() -> None:
+    if "ema_crossover" not in _REGISTRY:
+        register(EMACrossoverStrategy())
     if "ema_trend" not in _REGISTRY:
         register(EMATrendStrategy())
 
