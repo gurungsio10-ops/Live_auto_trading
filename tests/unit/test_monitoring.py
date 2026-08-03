@@ -47,6 +47,7 @@ async def test_readiness_ready_when_healthy():
             strategy_heartbeat_ok=True,
             order_engine_ok=True,
             risk_engine_ok=True,
+            reconciliation_healthy=True,
         )
     )
     health = svc.readiness()
@@ -57,7 +58,7 @@ async def test_readiness_ready_when_healthy():
     assert payload["status"] == "ready"
     assert payload["trading_mode"] == "paper"
     names = {c["name"] for c in payload["components"]}
-    assert {"database", "redis", "market_data", "risk_engine", "kill_switch"} <= names
+    assert {"database", "redis", "market_data", "risk_engine", "reconciliation", "kill_switch"} <= names
 
 
 @pytest.mark.asyncio

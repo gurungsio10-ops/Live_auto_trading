@@ -47,6 +47,22 @@ def _live_ready_settings(**overrides) -> Settings:
     )
 
 
+def _state(**overrides) -> RiskEngineState:
+    """Paper/unit helper: mark health probes verified (recon fail-closed by default)."""
+    data = dict(
+        risk_engine_healthy=True,
+        market_data_healthy=True,
+        database_healthy=True,
+        reconciliation_healthy=True,
+    )
+    data.update(overrides)
+    return RiskEngineState(**data)
+
+
+def _engine(settings: Settings | None = None, **state_overrides) -> RiskEngine:
+    return RiskEngine(settings or _settings(), _state(**state_overrides))
+
+
 def _portfolio(**overrides) -> PortfolioState:
     data = dict(
         cash_balance=Decimal("10000"),
@@ -90,33 +106,56 @@ def _request(**overrides) -> OrderRequest:
 
 
 def _ctx(**overrides) -> RiskContext:
-    data = dict(
-        portfolio=_portfolio(),
-        symbol_info=_symbol(),
-        mark_price=Decimal("100000"),
-        market_data_ts=utc_now(),
-        trading_mode="paper",
+    """Build context. Live flag overrides go through for_tests (test-only path)."""
+    settings = overrides.pop("settings", None) or _settings()
+    token = overrides.pop(
+        "presented_live_approval_token",
+        overrides.pop("live_approval_token", ""),
     )
-    data.update(overrides)
-    return RiskContext(**data)
+    if overrides.pop("live_approval_valid", None) and not token:
+        token = "approve-live-token-1234567890"
+
+    portfolio = overrides.pop("portfolio", _portfolio())
+    symbol_info = overrides.pop("symbol_info", _symbol())
+    mark_price = overrides.pop("mark_price", Decimal("100000"))
+    market_data_ts = overrides.pop("market_data_ts", utc_now())
+
+    if overrides:
+        return RiskContext.for_tests(
+            portfolio=portfolio,
+            settings=settings,
+            symbol_info=symbol_info,
+            mark_price=mark_price,
+            market_data_ts=market_data_ts,
+            presented_live_approval_token=token,
+            **overrides,
+        )
+    return RiskContext.from_settings(
+        settings,
+        portfolio=portfolio,
+        presented_live_approval_token=token,
+        symbol_info=symbol_info,
+        mark_price=mark_price,
+        market_data_ts=market_data_ts,
+    )
 
 
 def test_approved_happy_path():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(_request(), _ctx())
     assert result.decision == RiskDecision.APPROVED
     assert result.reason_code == RiskReasonCode.OK
 
 
 def test_kill_switch_active():
-    engine = RiskEngine(_settings(kill_switch_enabled=True))
-    result = engine.evaluate(_request(), _ctx(kill_switch_enabled=True))
+    engine = _engine(_settings(kill_switch_enabled=True))
+    result = engine.evaluate(_request(), _ctx())
     assert result.decision == RiskDecision.HALTED
     assert result.reason_code == RiskReasonCode.KILL_SWITCH_ACTIVE
 
 
 def test_data_stale():
-    engine = RiskEngine(_settings(market_data_stale_seconds=30))
+    engine = _engine(_settings(market_data_stale_seconds=30))
     result = engine.evaluate(
         _request(),
         _ctx(market_data_ts=utc_now() - timedelta(seconds=120)),
@@ -126,14 +165,14 @@ def test_data_stale():
 
 
 def test_duplicate_order():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     engine.evaluate(_request(idempotency_key="dup"), _ctx())
     result = engine.evaluate(_request(idempotency_key="dup"), _ctx())
     assert result.reason_code == RiskReasonCode.DUPLICATE_ORDER
 
 
 def test_invalid_price():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(order_type=OrderType.LIMIT, price=None),
         _ctx(),
@@ -142,13 +181,13 @@ def test_invalid_price():
 
 
 def test_invalid_quantity():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(_request(quantity=Decimal("0")), _ctx())
     assert result.reason_code == RiskReasonCode.INVALID_QUANTITY
 
 
 def test_min_order_size():
-    engine = RiskEngine(_settings(min_order_notional=Decimal("10")))
+    engine = _engine(_settings(min_order_notional=Decimal("10")))
     # Quantity respects step_size but notional is only $1
     result = engine.evaluate(
         _request(quantity=Decimal("0.01")),
@@ -158,14 +197,14 @@ def test_min_order_size():
 
 
 def test_precision_invalid():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(_request(quantity=Decimal("0.00015")), _ctx())
     # step_size 0.0001 — 0.00015 invalid
     assert result.reason_code == RiskReasonCode.PRECISION_INVALID
 
 
 def test_max_risk_per_trade_rejects():
-    engine = RiskEngine(_settings(max_risk_per_trade=Decimal("0.0000001")))
+    engine = _engine(_settings(max_risk_per_trade=Decimal("0.0000001")))
     result = engine.evaluate(
         _request(quantity=Decimal("1"), stop_loss=Decimal("1")),
         _ctx(mark_price=Decimal("100000")),
@@ -181,7 +220,8 @@ def test_max_position_exposure():
     engine = RiskEngine(
         _settings(
             max_position_exposure=Decimal("0.0001"), max_risk_per_trade=Decimal("0.5")
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(quantity=Decimal("1"), stop_loss=None, idempotency_key="pos"),
@@ -210,7 +250,8 @@ def test_max_portfolio_exposure():
             max_position_exposure=Decimal("0.90"),
             max_risk_per_trade=Decimal("0.50"),
             max_open_positions=10,
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(quantity=Decimal("0.05"), stop_loss=None, idempotency_key="port"),
@@ -236,7 +277,7 @@ def test_max_open_positions():
         )
         for i in range(3)
     ]
-    engine = RiskEngine(_settings(max_open_positions=3))
+    engine = _engine(_settings(max_open_positions=3))
     result = engine.evaluate(
         _request(idempotency_key="maxpos"),
         _ctx(portfolio=_portfolio(open_positions=positions)),
@@ -245,7 +286,7 @@ def test_max_open_positions():
 
 
 def test_daily_loss_limit_reached():
-    engine = RiskEngine(_settings(max_daily_loss=Decimal("0.03")))
+    engine = _engine(_settings(max_daily_loss=Decimal("0.03")))
     result = engine.evaluate(
         _request(idempotency_key="daily"),
         _ctx(
@@ -258,7 +299,7 @@ def test_daily_loss_limit_reached():
 
 
 def test_max_drawdown_reached():
-    engine = RiskEngine(_settings(max_drawdown=Decimal("0.10")))
+    engine = _engine(_settings(max_drawdown=Decimal("0.10")))
     result = engine.evaluate(
         _request(idempotency_key="dd"),
         _ctx(portfolio=_portfolio(drawdown=Decimal("0.15"))),
@@ -267,7 +308,7 @@ def test_max_drawdown_reached():
 
 
 def test_max_consecutive_losses():
-    engine = RiskEngine(_settings(max_consecutive_losses=5))
+    engine = _engine(_settings(max_consecutive_losses=5))
     result = engine.evaluate(
         _request(idempotency_key="cl"),
         _ctx(portfolio=_portfolio(consecutive_losses=5)),
@@ -276,14 +317,14 @@ def test_max_consecutive_losses():
 
 
 def test_max_order_frequency():
-    state = RiskEngineState(recent_order_times=[utc_now() for _ in range(10)])
+    state = _state(recent_order_times=[utc_now() for _ in range(10)])
     engine = RiskEngine(_settings(max_orders_per_minute=10), state=state)
     result = engine.evaluate(_request(idempotency_key="freq"), _ctx())
     assert result.reason_code == RiskReasonCode.MAX_ORDER_FREQUENCY
 
 
 def test_circuit_breaker_open():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     engine.open_circuit_breaker("too many errors")
     result = engine.evaluate(_request(idempotency_key="cb"), _ctx())
     assert result.decision == RiskDecision.HALTED
@@ -291,65 +332,134 @@ def test_circuit_breaker_open():
 
 
 def test_risk_engine_unhealthy():
-    state = RiskEngineState(risk_engine_healthy=False)
+    state = _state(risk_engine_healthy=False)
     engine = RiskEngine(_settings(), state=state)
     result = engine.evaluate(_request(idempotency_key="reh"), _ctx())
     assert result.reason_code == RiskReasonCode.RISK_ENGINE_UNHEALTHY
 
 
 def test_market_data_unhealthy():
-    state = RiskEngineState(market_data_healthy=False)
+    state = _state(market_data_healthy=False)
     engine = RiskEngine(_settings(), state=state)
     result = engine.evaluate(_request(idempotency_key="mdh"), _ctx())
     assert result.reason_code == RiskReasonCode.MARKET_DATA_UNHEALTHY
 
 
 def test_database_unhealthy():
-    state = RiskEngineState(database_healthy=False)
+    state = _state(database_healthy=False)
     engine = RiskEngine(_settings(), state=state)
     result = engine.evaluate(_request(idempotency_key="dbh"), _ctx())
     assert result.reason_code == RiskReasonCode.DATABASE_UNHEALTHY
 
 
 def test_reconciliation_unhealthy():
-    state = RiskEngineState(reconciliation_healthy=False)
+    state = _state(reconciliation_healthy=False)
     engine = RiskEngine(_settings(), state=state)
     result = engine.evaluate(_request(idempotency_key="rec"), _ctx())
     assert result.reason_code == RiskReasonCode.RECONCILIATION_UNHEALTHY
 
 
 def test_live_trading_disabled():
-    engine = RiskEngine(_settings(trading_mode="live", live_trading_enabled=False))
+    settings = _settings(
+        trading_mode="live",
+        live_trading_enabled=False,
+        live_approval_token=SecretStr("approve-live-token-1234567890"),
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+    )
+    engine = RiskEngine(settings, _state())
     result = engine.evaluate(
         _request(idempotency_key="liveoff"),
-        _ctx(trading_mode="live", live_trading_enabled=False),
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="approve-live-token-1234567890",
+        ),
     )
     assert result.reason_code == RiskReasonCode.LIVE_TRADING_DISABLED
+    assert result.checks["live_gate_details"]["failed_conditions"] == [
+        "live_trading_enabled"
+    ]
+
+
+def test_context_only_live_enabled_still_rejected():
+    """Item 6: context-only True cannot bypass Settings.live_trading_enabled=False."""
+    settings = _settings(
+        trading_mode="live",
+        live_trading_enabled=False,
+        live_approval_token=SecretStr("approve-live-token-1234567890"),
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+    )
+    engine = RiskEngine(settings, _state())
+    ctx = RiskContext.for_tests(
+        portfolio=_portfolio(),
+        settings=settings,
+        symbol_info=_symbol(),
+        mark_price=Decimal("100000"),
+        market_data_ts=utc_now(),
+        live_trading_enabled=True,  # test-only override
+        presented_live_approval_token="approve-live-token-1234567890",
+    )
+    assert ctx.live_trading_enabled is True
+    assert ctx._test_override is True
+    assert settings.live_trading_enabled is False
+    result = engine.evaluate(_request(idempotency_key="bypass"), ctx)
+    assert result.decision == RiskDecision.REJECTED
+    assert result.reason_code in (
+        RiskReasonCode.LIVE_TRADING_DISABLED,
+        RiskReasonCode.LIVE_GATING_INCOMPLETE,
+    )
+    assert (
+        "live_trading_enabled"
+        in result.checks["live_gate_details"]["failed_conditions"]
+    )
 
 
 def test_invalid_credentials():
-    engine = RiskEngine(_live_ready_settings())
+    settings = _live_ready_settings(
+        exchange_api_key=None,
+        exchange_api_secret=None,
+    )
+    engine = RiskEngine(settings, _state())
     result = engine.evaluate(
         _request(idempotency_key="creds"),
-        _ctx(
-            trading_mode="live",
-            live_trading_enabled=True,
-            has_exchange_credentials=False,
-            live_approval_valid=True,
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="approve-live-token-1234567890",
         ),
     )
-    assert result.reason_code == RiskReasonCode.INVALID_CREDENTIALS
+    assert result.reason_code in (
+        RiskReasonCode.INVALID_CREDENTIALS,
+        RiskReasonCode.LIVE_GATING_INCOMPLETE,
+    )
+    assert (
+        "valid_credentials" in result.checks["live_gate_details"]["failed_conditions"]
+    )
 
 
 def test_invalid_live_approval():
-    engine = RiskEngine(_live_ready_settings())
+    settings = _live_ready_settings(
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+    )
+    engine = RiskEngine(settings, _state())
     result = engine.evaluate(
         _request(idempotency_key="approval"),
-        _ctx(
-            trading_mode="live",
-            live_trading_enabled=True,
-            has_exchange_credentials=True,
-            live_approval_valid=False,
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="wrong-token-value",
         ),
     )
     assert result.reason_code == RiskReasonCode.INVALID_LIVE_APPROVAL
@@ -361,7 +471,8 @@ def test_size_reduced_by_risk():
             max_risk_per_trade=Decimal("0.01"),
             max_position_exposure=Decimal("0.50"),
             max_portfolio_exposure=Decimal("0.80"),
-        )
+        ),
+        _state(),
     )
     # Large qty with tight stop relative to equity → reduced
     result = engine.evaluate(
@@ -379,7 +490,7 @@ def test_size_reduced_by_risk():
 
 
 def test_invalid_mark_price():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(idempotency_key="mark"),
         _ctx(mark_price=Decimal("0")),
@@ -388,7 +499,7 @@ def test_invalid_mark_price():
 
 
 def test_no_valid_price_without_mark():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(idempotency_key="noprice"),
         _ctx(mark_price=None),
@@ -397,7 +508,7 @@ def test_no_valid_price_without_mark():
 
 
 def test_limit_price_zero():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(order_type=OrderType.LIMIT, price=Decimal("0"), idempotency_key="lp0"),
         _ctx(),
@@ -406,7 +517,7 @@ def test_limit_price_zero():
 
 
 def test_below_min_quantity():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     # Valid step but below exchange min_quantity
     result = engine.evaluate(
         _request(quantity=Decimal("0.0001"), idempotency_key="minq2"),
@@ -429,7 +540,7 @@ def test_below_min_quantity():
 
 
 def test_price_tick_invalid():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(
             order_type=OrderType.LIMIT,
@@ -443,7 +554,7 @@ def test_price_tick_invalid():
 
 
 def test_no_symbol_info_min_notional():
-    engine = RiskEngine(_settings(min_order_notional=Decimal("10")))
+    engine = _engine(_settings(min_order_notional=Decimal("10")))
     result = engine.evaluate(
         _request(quantity=Decimal("0.01"), idempotency_key="nosym"),
         _ctx(symbol_info=None, mark_price=Decimal("100")),
@@ -452,7 +563,7 @@ def test_no_symbol_info_min_notional():
 
 
 def test_close_circuit_breaker():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     engine.open_circuit_breaker("err")
     engine.close_circuit_breaker()
     result = engine.evaluate(_request(idempotency_key="cbc"), _ctx())
@@ -460,31 +571,44 @@ def test_close_circuit_breaker():
 
 
 def test_live_gating_all_pass():
-    engine = RiskEngine(_live_ready_settings())
+    settings = _live_ready_settings(
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+    )
+    engine = RiskEngine(settings, _state())
     result = engine.evaluate(
         _request(idempotency_key="liveok"),
-        _ctx(
-            trading_mode="live",
-            live_trading_enabled=True,
-            has_exchange_credentials=True,
-            live_approval_valid=True,
-            kill_switch_enabled=False,
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="approve-live-token-1234567890",
         ),
     )
     assert result.decision == RiskDecision.APPROVED
     assert result.checks.get("live_gating") == "passed"
+    assert result.checks["live_gate_details"]["failed_conditions"] == []
 
 
 def test_live_kill_switch_in_gating():
-    engine = RiskEngine(_live_ready_settings())
+    # Kill switch on Settings is caught before live gating; still a hard block.
+    settings = _live_ready_settings(
+        kill_switch_enabled=True,
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
+    )
+    engine = RiskEngine(settings, _state())
     result = engine.evaluate(
         _request(idempotency_key="livekill"),
-        _ctx(
-            trading_mode="live",
-            live_trading_enabled=True,
-            kill_switch_enabled=True,
-            has_exchange_credentials=True,
-            live_approval_valid=True,
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="approve-live-token-1234567890",
         ),
     )
     assert result.reason_code == RiskReasonCode.KILL_SWITCH_ACTIVE
@@ -500,19 +624,21 @@ def test_live_kill_switch_in_gating():
     ],
 )
 def test_live_gating_health_flags(flag, code):
-    state = RiskEngineState(**{flag: False})
-    # risk_engine_healthy False is caught before live gating — still assert code
-    engine = RiskEngine(
-        _live_ready_settings(),
-        state=state,
+    state = _state(**{flag: False})
+    settings = _live_ready_settings(
+        exchange_api_key=SecretStr("key-123456789012345678901234"),
+        exchange_api_secret=SecretStr("secret-123456789012345678901234"),
     )
+    engine = RiskEngine(settings, state=state)
     result = engine.evaluate(
         _request(idempotency_key=f"live-{flag}"),
-        _ctx(
-            trading_mode="live",
-            live_trading_enabled=True,
-            has_exchange_credentials=True,
-            live_approval_valid=True,
+        RiskContext.from_settings(
+            settings,
+            portfolio=_portfolio(),
+            symbol_info=_symbol(),
+            mark_price=Decimal("100000"),
+            market_data_ts=utc_now(),
+            presented_live_approval_token="approve-live-token-1234567890",
         ),
     )
     assert result.reason_code == code
@@ -535,7 +661,8 @@ def test_portfolio_exposure_no_room():
             max_position_exposure=Decimal("0.90"),
             max_risk_per_trade=Decimal("0.50"),
             max_open_positions=10,
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(quantity=Decimal("0.01"), stop_loss=None, idempotency_key="noroom"),
@@ -561,7 +688,7 @@ def test_singleton_helpers():
 
 
 def test_missing_market_data_ts_skips_stale_check():
-    engine = RiskEngine(_settings())
+    engine = _engine()
     result = engine.evaluate(
         _request(idempotency_key="no-md-ts"),
         _ctx(market_data_ts=None),
@@ -592,7 +719,8 @@ def test_max_risk_per_trade_hard_reject_when_budget_too_small():
             max_position_exposure=Decimal("1"),
             max_portfolio_exposure=Decimal("1"),
             min_order_notional=Decimal("0.01"),
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(
@@ -622,7 +750,8 @@ def test_max_position_exposure_hard_reject_tiny_equity():
             max_position_exposure=Decimal("0.01"),
             max_portfolio_exposure=Decimal("1"),
             min_order_notional=Decimal("0.01"),
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(
@@ -662,7 +791,8 @@ def test_portfolio_exposure_reduces_when_partial_room():
             max_position_exposure=Decimal("0.90"),
             max_risk_per_trade=Decimal("0.50"),
             max_open_positions=10,
-        )
+        ),
+        _state(),
     )
     result = engine.evaluate(
         _request(
@@ -685,17 +815,17 @@ def test_portfolio_exposure_reduces_when_partial_room():
 def test_rejected_evaluations_never_omit_reason_code():
     cases = [
         (
-            RiskEngine(_settings(kill_switch_enabled=True)),
+            _engine(_settings(kill_switch_enabled=True)),
             _request(idempotency_key="r1"),
             _ctx(kill_switch_enabled=True),
         ),
         (
-            RiskEngine(_settings()),
+            _engine(),
             _request(quantity=Decimal("0"), idempotency_key="r2"),
             _ctx(),
         ),
         (
-            RiskEngine(_settings(), RiskEngineState(market_data_healthy=False)),
+            RiskEngine(_settings(), _state(market_data_healthy=False)),
             _request(idempotency_key="r3"),
             _ctx(),
         ),

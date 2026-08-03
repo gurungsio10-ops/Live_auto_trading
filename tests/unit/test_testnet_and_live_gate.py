@@ -165,35 +165,81 @@ def _live_settings(**overrides: object) -> Settings:
 def test_live_gate_all_nine_pass() -> None:
     gate = LiveTradingGate(
         _live_settings(),
-        LiveReadinessState(live_approval_valid=True),
+        LiveReadinessState(
+            risk_engine_healthy=True,
+            market_data_healthy=True,
+            database_healthy=True,
+            reconciliation_healthy=True,
+            balances_verified=True,
+            clock_synced=True,
+            account_readable=True,
+        ),
+        presented_approval_token="approve-live-token-1234567890",
     )
     result = gate.evaluate()
     assert result.allowed is True
     assert result.failed_conditions == []
-    assert set(result.details) == set(LIVE_CONDITIONS)
+    assert set(result.details["conditions"]) == set(LIVE_CONDITIONS)
 
 
 @pytest.mark.parametrize(
-    "override_settings,override_state,expected_condition",
+    "override_settings,override_state,token,expected_condition",
     [
-        ({"trading_mode": "paper"}, {}, "trading_mode_live"),
-        ({"live_trading_enabled": False}, {}, "live_trading_enabled"),
-        ({"kill_switch_enabled": True}, {}, "kill_switch_off"),
+        (
+            {"trading_mode": "paper"},
+            {},
+            "approve-live-token-1234567890",
+            "trading_mode_live",
+        ),
+        (
+            {"live_trading_enabled": False},
+            {},
+            "approve-live-token-1234567890",
+            "live_trading_enabled",
+        ),
+        (
+            {"kill_switch_enabled": True},
+            {},
+            "approve-live-token-1234567890",
+            "kill_switch_off",
+        ),
         (
             {"exchange_api_key": None, "exchange_api_secret": None},
             {},
+            "approve-live-token-1234567890",
             "valid_credentials",
         ),
-        ({}, {"risk_engine_healthy": False}, "risk_engine_healthy"),
-        ({}, {"market_data_healthy": False}, "market_data_healthy"),
-        ({}, {"database_healthy": False}, "database_healthy"),
-        ({}, {"reconciliation_healthy": False}, "reconciliation_healthy"),
-        ({}, {"live_approval_valid": False}, "valid_live_approval_token"),
+        (
+            {},
+            {"risk_engine_healthy": False},
+            "approve-live-token-1234567890",
+            "risk_engine_healthy",
+        ),
+        (
+            {},
+            {"market_data_healthy": False},
+            "approve-live-token-1234567890",
+            "market_data_healthy",
+        ),
+        (
+            {},
+            {"database_healthy": False},
+            "approve-live-token-1234567890",
+            "database_healthy",
+        ),
+        (
+            {},
+            {"reconciliation_healthy": False},
+            "approve-live-token-1234567890",
+            "reconciliation_healthy",
+        ),
+        ({}, {}, "wrong-token", "valid_live_approval_token"),
     ],
 )
 def test_each_live_condition_blocks_individually(
     override_settings: dict,
     override_state: dict,
+    token: str,
     expected_condition: str,
 ) -> None:
     state_kwargs = dict(
@@ -201,12 +247,17 @@ def test_each_live_condition_blocks_individually(
         market_data_healthy=True,
         database_healthy=True,
         reconciliation_healthy=True,
-        live_approval_valid=True,
+        balances_verified=True,
+        clock_synced=True,
+        account_readable=True,
     )
     state_kwargs.update(override_state)
     gate = LiveTradingGate(
-        _live_settings(**override_settings), LiveReadinessState(**state_kwargs)
+        _live_settings(**override_settings),
+        LiveReadinessState(**state_kwargs),
+        presented_approval_token=token,
     )
     result = gate.evaluate()
     assert result.allowed is False
     assert expected_condition in result.failed_conditions
+    assert expected_condition in result.details["failed_conditions"]

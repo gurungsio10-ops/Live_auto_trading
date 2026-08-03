@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 
 from app.ai import TradingAnalyst
@@ -119,14 +119,24 @@ async def risk_settings() -> dict:
 
 
 @router.get("/live-gate/status")
-async def live_gate_status() -> dict:
-    result = LiveTradingGate().evaluate()
+async def live_gate_status(
+    x_live_approval_token: str | None = Header(default=None),
+) -> dict:
+    """Live readiness. details.failed_conditions lists ALL failures, not just the first."""
+    result = LiveTradingGate(
+        presented_approval_token=x_live_approval_token or "",
+    ).evaluate()
+    details = result.details or {}
     return {
         "allowed": result.allowed,
         "failed_conditions": result.failed_conditions,
         "reason_code": result.reason_code.value if result.reason_code else None,
         "conditions": list(LIVE_CONDITIONS),
-        "details": result.details,
+        "details": {
+            **details,
+            # Explicit top-level mirror so clients cannot miss multi-fail lists.
+            "failed_conditions": list(result.failed_conditions),
+        },
     }
 
 

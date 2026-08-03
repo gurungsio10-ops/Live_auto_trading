@@ -25,12 +25,20 @@ class RiskEngineState:
     risk_engine_healthy: bool = True
     market_data_healthy: bool = True
     database_healthy: bool = True
-    reconciliation_healthy: bool = True
+    reconciliation_healthy: bool = False  # fail-closed until producer verifies
     last_market_data_ts: datetime | None = None
 
 
 @dataclass
 class RiskContext:
+    """Order evaluation context.
+
+    Live-readiness flags are derived from ``Settings`` via ``from_settings``.
+    Direct flag overrides are test-only (``for_tests``) and must never be used
+    on a real request path — ``RiskEngine`` still enforces Settings as the
+    source of truth for live gates.
+    """
+
     portfolio: PortfolioState
     symbol_info: SymbolInfo | None = None
     mark_price: Decimal | None = None
@@ -39,8 +47,78 @@ class RiskContext:
     live_trading_enabled: bool = False
     kill_switch_enabled: bool = False
     has_exchange_credentials: bool = False
-    live_approval_valid: bool = False
+    presented_live_approval_token: str = ""
     exchange_env: str = "paper"
+    # Set only by RiskContext.for_tests — production paths leave this False.
+    _test_override: bool = field(default=False, repr=False, compare=False)
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Settings,
+        *,
+        portfolio: PortfolioState,
+        presented_live_approval_token: str = "",
+        symbol_info: SymbolInfo | None = None,
+        mark_price: Decimal | None = None,
+        market_data_ts: datetime | None = None,
+    ) -> RiskContext:
+        """Production constructor — live flags come only from Settings."""
+        return cls(
+            portfolio=portfolio,
+            symbol_info=symbol_info,
+            mark_price=mark_price,
+            market_data_ts=market_data_ts,
+            trading_mode=settings.trading_mode,
+            live_trading_enabled=settings.live_trading_enabled,
+            kill_switch_enabled=settings.kill_switch_enabled,
+            has_exchange_credentials=settings.has_exchange_credentials,
+            presented_live_approval_token=presented_live_approval_token,
+            exchange_env=settings.exchange_env,
+            _test_override=False,
+        )
+
+    @classmethod
+    def for_tests(
+        cls,
+        *,
+        portfolio: PortfolioState,
+        settings: Settings | None = None,
+        symbol_info: SymbolInfo | None = None,
+        mark_price: Decimal | None = None,
+        market_data_ts: datetime | None = None,
+        presented_live_approval_token: str = "",
+        **overrides: Any,
+    ) -> RiskContext:
+        """TEST-ONLY. Apply context overrides; never call from request handlers."""
+        base_settings = settings or get_settings()
+        ctx = cls.from_settings(
+            base_settings,
+            portfolio=portfolio,
+            presented_live_approval_token=presented_live_approval_token,
+            symbol_info=symbol_info,
+            mark_price=mark_price,
+            market_data_ts=market_data_ts,
+        )
+        if overrides:
+            allowed = {
+                "trading_mode",
+                "live_trading_enabled",
+                "kill_switch_enabled",
+                "has_exchange_credentials",
+                "presented_live_approval_token",
+                "exchange_env",
+                "symbol_info",
+                "mark_price",
+                "market_data_ts",
+            }
+            unknown = set(overrides) - allowed
+            if unknown:
+                raise TypeError(f"Unknown RiskContext.for_tests overrides: {unknown}")
+            for key, value in overrides.items():
+                setattr(ctx, key, value)
+            ctx._test_override = True
+        return ctx
 
 
 class RiskEngine:
@@ -65,7 +143,7 @@ class RiskEngine:
                 RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk engine unhealthy", checks
             )
 
-        if self.settings.kill_switch_enabled or context.kill_switch_enabled:
+        if self.settings.kill_switch_enabled:
             return self._halt(
                 RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks
             )
@@ -77,7 +155,7 @@ class RiskEngine:
                 checks,
             )
 
-        if context.trading_mode == "live" or self.settings.trading_mode == "live":
+        if self.settings.trading_mode == "live":
             live_eval = self._check_live_gating(context, checks)
             if live_eval is not None:
                 return live_eval
@@ -346,49 +424,54 @@ class RiskEngine:
     def _check_live_gating(
         self, context: RiskContext, checks: dict[str, Any]
     ) -> RiskEvaluation | None:
-        """All live gates must pass; any failure blocks."""
-        if not (context.live_trading_enabled or self.settings.live_trading_enabled):
-            return self._reject(
-                RiskReasonCode.LIVE_TRADING_DISABLED, "Live trading disabled", checks
-            )
-        if context.kill_switch_enabled or self.settings.kill_switch_enabled:
-            return self._halt(
-                RiskReasonCode.KILL_SWITCH_ACTIVE, "Kill switch active", checks
-            )
-        if not (
-            context.has_exchange_credentials or self.settings.has_exchange_credentials
-        ):
-            return self._reject(
-                RiskReasonCode.INVALID_CREDENTIALS, "Missing credentials", checks
-            )
-        if not self.state.risk_engine_healthy:
-            return self._reject(
-                RiskReasonCode.RISK_ENGINE_UNHEALTHY, "Risk unhealthy", checks
-            )
-        if not self.state.market_data_healthy:
-            return self._reject(
-                RiskReasonCode.MARKET_DATA_UNHEALTHY, "MD unhealthy", checks
-            )
-        if not self.state.database_healthy:
-            return self._reject(
-                RiskReasonCode.DATABASE_UNHEALTHY, "DB unhealthy", checks
-            )
-        if not self.state.reconciliation_healthy:
-            return self._reject(
-                RiskReasonCode.RECONCILIATION_UNHEALTHY,
-                "Reconciliation unhealthy",
-                checks,
-            )
-        token = self.settings.live_approval_token
-        token_configured = token is not None and bool(token.get_secret_value().strip())
-        if not context.live_approval_valid or not token_configured:
-            return self._reject(
-                RiskReasonCode.INVALID_LIVE_APPROVAL,
-                "Live approval token invalid",
-                checks,
-            )
-        checks["live_gating"] = "passed"
-        return None
+        """All live gates must pass; Settings is the source of truth.
+
+        Context live flags are informational / test mirrors only — a context-only
+        True cannot satisfy a Settings False. Approval requires hmac compare of
+        the presented token against Settings.live_approval_token.
+        """
+        from app.execution.live_gate import (
+            LIVE_CONDITIONS,
+            approval_token_matches,
+            build_live_gate_details,
+            reason_for_condition,
+        )
+
+        live_checks = {
+            "trading_mode_live": self.settings.trading_mode == "live",
+            "live_trading_enabled": self.settings.live_trading_enabled is True,
+            "kill_switch_off": self.settings.kill_switch_enabled is False,
+            "valid_credentials": self.settings.has_exchange_credentials,
+            "risk_engine_healthy": self.state.risk_engine_healthy,
+            "market_data_healthy": self.state.market_data_healthy,
+            "database_healthy": self.state.database_healthy,
+            "reconciliation_healthy": self.state.reconciliation_healthy,
+            "valid_live_approval_token": approval_token_matches(
+                context.presented_live_approval_token, self.settings
+            ),
+        }
+        assert set(live_checks) == set(LIVE_CONDITIONS)
+        details = build_live_gate_details(live_checks)
+        checks["live_gate_details"] = details
+        failed: list[str] = details["failed_conditions"]
+        if not failed:
+            checks["live_gating"] = "passed"
+            return None
+
+        first = failed[0]
+        code = (
+            RiskReasonCode.LIVE_GATING_INCOMPLETE
+            if len(failed) > 1
+            else reason_for_condition(first)
+        )
+        # Kill switch remains a halt; other live failures are rejects.
+        if first == "kill_switch_off" and len(failed) == 1:
+            return self._halt(code, "Kill switch active", checks)
+        return self._reject(
+            code,
+            f"Live gating failed: {', '.join(failed)}",
+            checks,
+        )
 
     @staticmethod
     def _reject(

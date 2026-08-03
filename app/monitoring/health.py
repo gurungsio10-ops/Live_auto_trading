@@ -88,6 +88,7 @@ class HealthRegistry:
     strategy_heartbeat_ok: bool = True
     order_engine_ok: bool = True
     risk_engine_ok: bool = True
+    reconciliation_healthy: bool = False  # fail-closed
     error_count: int = 0
     trading_paused: bool = False
     last_market_data_at: datetime | None = None
@@ -112,6 +113,11 @@ class MonitoringService:
             ComponentHealth("strategy", self.registry.strategy_heartbeat_ok),
             ComponentHealth("order_engine", self.registry.order_engine_ok),
             ComponentHealth("risk_engine", self.registry.risk_engine_ok),
+            ComponentHealth(
+                "reconciliation",
+                self.registry.reconciliation_healthy,
+                detail="fail-closed until compare succeeds",
+            ),
             ComponentHealth(
                 "kill_switch",
                 not settings.kill_switch_enabled,

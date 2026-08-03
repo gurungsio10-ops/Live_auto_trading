@@ -171,7 +171,7 @@ async def test_gateway_reduced_quantity():
         max_portfolio_exposure=Decimal("0.8"),
         _env_file=None,
     )
-    risk = RiskEngine(settings, RiskEngineState())
+    risk = RiskEngine(settings, RiskEngineState(reconciliation_healthy=True))
     gateway = OrderGateway(paper, risk_engine=risk)
     order = await gateway.submit(
         _req(
@@ -408,7 +408,7 @@ async def test_gateway_always_evaluates_risk_before_backend():
                 max_portfolio_exposure=Decimal("0.9"),
                 _env_file=None,
             ),
-            RiskEngineState(),
+            RiskEngineState(reconciliation_healthy=True),
         ),
     )
     order = await gateway.submit(
