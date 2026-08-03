@@ -156,6 +156,10 @@ def test_multi_fail_details_lists_all_failed_conditions() -> None:
     assert set(failed) == set(result.failed_conditions)
     assert len(failed) >= 4
     assert set(result.details["failed_reason_codes"]) == set(failed)
+    for name in failed:
+        assert (
+            result.details["failed_reason_codes"][name] == CONDITION_REASON[name].value
+        )
 
 
 # --- Item 3: credential edges ---
@@ -291,6 +295,12 @@ def _engine(settings: Settings, **state_kw) -> RiskEngine:
             RiskReasonCode.RECONCILIATION_UNHEALTHY,
         ),
         ({}, {}, "wrong-token", RiskReasonCode.INVALID_LIVE_APPROVAL),
+        (
+            {},
+            {"risk_engine_healthy": False},
+            TOKEN_A,
+            RiskReasonCode.RISK_ENGINE_UNHEALTHY,
+        ),
     ],
 )
 async def test_gateway_blocks_each_live_condition(
@@ -311,8 +321,12 @@ async def test_gateway_blocks_each_live_condition(
     with pytest.raises(RiskBlockedError) as exc:
         await gateway.submit(_req(), ctx)
     ev = exc.value.evaluation
-    if expected_code == RiskReasonCode.KILL_SWITCH_ACTIVE:
-        assert ev.reason_code == RiskReasonCode.KILL_SWITCH_ACTIVE
+    if expected_code in (
+        RiskReasonCode.KILL_SWITCH_ACTIVE,
+        RiskReasonCode.RISK_ENGINE_UNHEALTHY,
+    ):
+        # Caught before live-gate detail assembly when Settings.trading_mode is live.
+        assert ev.reason_code == expected_code
         return
     details = ev.checks["live_gate_details"]
     assert expected_code.value in details["failed_reason_codes"].values() or (
@@ -321,6 +335,41 @@ async def test_gateway_blocks_each_live_condition(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_gateway_paper_mode_skips_live_gating_not_a_live_block() -> None:
+    """trading_mode_live is Settings-derived: paper mode never enters live gating.
+
+    So a 'missing' trading_mode_live condition is not expressed as RiskBlockedError
+    with LIVE_GATING_INCOMPLETE on the gateway path — the order uses the paper path.
+    LiveTradingGate still reports trading_mode_live failed (covered elsewhere).
+    """
+    settings = _live_ready_settings(trading_mode="paper")
+    paper = PaperTradingEngine(PaperConfig(initial_cash=Decimal("10000")))
+    paper.set_mark_price("BTC/USDT", Decimal("100000"))
+    gateway = OrderGateway(paper, risk_engine=_engine(settings))
+    ctx = RiskContext.from_settings(
+        settings,
+        portfolio=_portfolio(),
+        symbol_info=_symbol(),
+        mark_price=Decimal("100000"),
+        market_data_ts=utc_now(),
+        presented_live_approval_token=TOKEN_A,
+    )
+    order = await gateway.submit(_req(), ctx)
+    assert order.status.value == "FILLED"
+    assert "live_gate_details" not in (
+        order.raw if hasattr(order, "raw") and isinstance(order.raw, dict) else {}
+    )
+    gate = LiveTradingGate(
+        settings, _ready_state(), presented_approval_token=TOKEN_A
+    ).evaluate()
+    assert gate.allowed is False
+    assert "trading_mode_live" in gate.failed_conditions
+    assert gate.details["failed_reason_codes"]["trading_mode_live"] == (
+        RiskReasonCode.LIVE_GATING_INCOMPLETE.value
+    )
+
+
 async def test_gateway_allows_when_settings_and_token_satisfied() -> None:
     settings = _live_ready_settings()
     paper = PaperTradingEngine(PaperConfig(initial_cash=Decimal("10000")))

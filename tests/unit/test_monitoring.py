@@ -58,7 +58,14 @@ async def test_readiness_ready_when_healthy():
     assert payload["status"] == "ready"
     assert payload["trading_mode"] == "paper"
     names = {c["name"] for c in payload["components"]}
-    assert {"database", "redis", "market_data", "risk_engine", "reconciliation", "kill_switch"} <= names
+    assert {
+        "database",
+        "redis",
+        "market_data",
+        "risk_engine",
+        "reconciliation",
+        "kill_switch",
+    } <= names
 
 
 @pytest.mark.asyncio
