@@ -24,3 +24,34 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # Optional: run API in Docker for local soak tests.
+  # Prefer host uvicorn during active development.
+  api:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: >
+      bash -lc "pip install -q -e '.[dev]' &&
+      alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      APP_ENV: development
+      TRADING_MODE: paper
+      EXCHANGE_ENV: ${EXCHANGE_ENV:-paper}
+      EXCHANGE_API_KEY: ${EXCHANGE_API_KEY:-}
+      EXCHANGE_API_SECRET: ${EXCHANGE_API_SECRET:-}
+      DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlas
+      REDIS_URL: redis://redis:6379/0
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-local-dev-admin-token}
+      BINANCE_TESTNET_REST_URL: https://testnet.binance.vision
+      BINANCE_TESTNET_WS_URL: wss://stream.testnet.binance.vision/ws
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["app"]

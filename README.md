@@ -135,13 +135,49 @@ CI: `.github/workflows/ci.yml`.
 | 503 on kill-switch/reset | Set `ADMIN_API_TOKEN` on API (and Next server for reset proxy) |
 | Startup fails with live mode | Expected — keep `TRADING_MODE=paper` |
 
+## Binance Spot Testnet (Sprint 1)
+
+See `docs/architecture/binance_spot_testnet.md`.
+
+```bash
+# Keys from https://testnet.binance.vision/
+EXCHANGE_ENV=testnet
+EXCHANGE_API_KEY=...
+EXCHANGE_API_SECRET=...
+TRADING_MODE=paper   # keep paper — testnet ≠ live money
+
+# Offline / CI sample cycle
+curl -X POST http://127.0.0.1:8000/api/v1/testnet/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m","use_sample_candles":true}'
+
+# REST kline cycle against Spot Testnet
+curl -X POST http://127.0.0.1:8000/api/v1/testnet/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m","use_sample_candles":false}'
+
+# Continuous WS + reconciler
+curl -X POST http://127.0.0.1:8000/api/v1/testnet/runtime/start \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN"
+```
+
+Docs: `docs/architecture/binance_spot_testnet.md`,
+`docs/operations/testnet_configuration.md`,
+`docs/operations/testnet_deployment.md`,
+`docs/operations/testnet_troubleshooting.md`.
+
+`EXCHANGE_ENV=live` / `TRADING_MODE=live` raises `LiveTradingDisabledError`.
+
+Docker: `docker compose up -d` (postgres/redis); `docker compose --profile app up -d` for API.
+
 ## Current limitations
 
 - In-memory paper session resets on process restart (journal tables exist for durable audit when wired with a DB session)
+- Testnet runtime hydrates balances/orders from the exchange on start; signal/fill UI history is process-local
 - Public Binance may be unreachable from some networks
 - Backtests share strategy rules but do not always share the live risk gateway path
 - Live order execution is intentionally unimplemented
-- Simulated / backtest results **do not guarantee future performance**
+- Simulated / backtest / testnet results **do not guarantee future performance**
 
 ## Warnings
 

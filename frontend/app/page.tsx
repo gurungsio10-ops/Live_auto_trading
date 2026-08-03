@@ -22,9 +22,11 @@ export default function OverviewPage() {
   const [pausePending, setPausePending] = useState(false);
   const [exportPending, setExportPending] = useState(false);
   const [cyclePending, setCyclePending] = useState(false);
+  const [testnetCyclePending, setTestnetCyclePending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [lastCycle, setLastCycle] = useState<Record<string, unknown> | null>(null);
+  const [testnetStatus, setTestnetStatus] = useState<Record<string, unknown> | null>(null);
 
   async function togglePause() {
     if (portfolio.status !== "success") return;
@@ -86,6 +88,32 @@ export default function OverviewPage() {
     }
   }
 
+  async function runTestnetCycle() {
+    setTestnetCyclePending(true);
+    setActionMsg(null);
+    try {
+      const res = await api.post<{
+        cycle?: Record<string, unknown>;
+        dashboard?: Record<string, unknown>;
+      }>("/api/testnet/cycle", {});
+      if (res.meta?.backend_error) {
+        setActionMsg(res.meta.backend_error);
+        return;
+      }
+      const cycle = res.data?.cycle ?? {};
+      setLastCycle(cycle);
+      setTestnetStatus(res.data?.dashboard ?? null);
+      setActionMsg(
+        `Testnet cycle: ${String(cycle.signal_direction ?? "hold")} status=${String(cycle.order_status ?? "none")} (Spot Testnet / not live money)`,
+      );
+      await Promise.all([portfolio.reload(), equity.reload()]);
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : "Testnet cycle failed");
+    } finally {
+      setTestnetCyclePending(false);
+    }
+  }
+
   async function resetPaperAccount() {
     const ok = window.confirm(
       "Reset the PAPER account to the starting balance?\n\nThis clears simulated positions, orders, and session state.\nType confirmation is enforced server-side.",
@@ -130,6 +158,14 @@ export default function OverviewPage() {
             onClick={runPaperCycle}
           >
             {cyclePending ? "Running…" : "Run one paper cycle"}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={testnetCyclePending}
+            onClick={runTestnetCycle}
+          >
+            {testnetCyclePending ? "Running…" : "Run testnet cycle"}
           </Button>
           <Button
             type="button"
@@ -191,10 +227,36 @@ export default function OverviewPage() {
               }
             />
           </div>
+          {testnetStatus && (
+            <Card title="Testnet connection" subtitle="Spot Testnet status (not live money)">
+              <dl className="grid gap-2 text-[11px] font-mono sm:grid-cols-2">
+                <div>
+                  <dt className="text-terminal-dim">Portfolio</dt>
+                  <dd>{String(testnetStatus.portfolio_value ?? "—")}</dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">Available USDT</dt>
+                  <dd>{String(testnetStatus.available_usdt ?? "—")}</dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">WS</dt>
+                  <dd>
+                    {JSON.stringify(
+                      (testnetStatus.websocket_health as Record<string, unknown>) ?? {},
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-terminal-dim">Kill switch</dt>
+                  <dd>{String(testnetStatus.kill_switch ?? false)}</dd>
+                </div>
+              </dl>
+            </Card>
+          )}
           {lastCycle && (
             <Card
-              title="Latest paper cycle"
-              subtitle="EMA crossover → risk → paper fill (simulated)"
+              title="Latest cycle"
+              subtitle="EMA crossover → risk → execution (paper or Spot Testnet)"
             >
               <dl className="grid gap-2 text-[11px] font-mono sm:grid-cols-2">
                 <div>

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.routes import router as api_router
+from app.api.testnet import router as testnet_router
 from app.api.v1 import router as v1_router
 from app.core.config import get_settings
 from app.core.errors import AtlasError, ConfigurationError, LiveTradingDisabledError
@@ -41,6 +42,7 @@ app = FastAPI(
 )
 app.include_router(api_router, prefix="/api")
 app.include_router(v1_router, prefix="/api/v1")
+app.include_router(testnet_router, prefix="/api/v1")
 # Root-level endpoints matching the Next.js proxy contract.
 app.include_router(auth_router)
 app.include_router(dashboard_router)

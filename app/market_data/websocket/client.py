@@ -45,6 +45,8 @@ class WebSocketMarketDataClient:
     on_tick: TickHandler | None = None
     transport: Any | None = None  # duck-typed WS connect/send/recv/close
     rest_fallback: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    # Combined-stream URLs (Binance) already encode subscriptions — skip send.
+    auto_subscribe: bool = True
 
     subscriptions: set[str] = field(default_factory=set)
     metrics: ConnectionMetrics = field(default_factory=ConnectionMetrics)
@@ -56,6 +58,9 @@ class WebSocketMarketDataClient:
     def __post_init__(self) -> None:
         if self.stale_seconds is None:
             self.stale_seconds = get_settings().market_data_stale_seconds
+        # Seed subscription set from symbols so REST fallback has a target.
+        for symbol in self.symbols:
+            self.subscriptions.add(symbol)
 
     @property
     def is_stale(self) -> bool:
@@ -114,8 +119,9 @@ class WebSocketMarketDataClient:
         await self.transport.connect(self.url)
         self.metrics.connects += 1
         self.metrics.connected = True
-        for symbol in list(self.subscriptions or self.symbols):
-            await self.subscribe(symbol)
+        if self.auto_subscribe:
+            for symbol in list(self.subscriptions or self.symbols):
+                await self.subscribe(symbol)
         while self._running:
             raw = await self.transport.recv()
             await self._handle_message(raw)
