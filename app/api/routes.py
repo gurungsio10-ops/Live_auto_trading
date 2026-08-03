@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.ai import TradingAnalyst
@@ -75,7 +75,9 @@ async def kill_switch(body: KillSwitchBody) -> dict:
     global _kill_switch_override
     _kill_switch_override = body.enabled
     if body.enabled:
-        await _monitoring.alert("KILL_SWITCH_ACTIVATED", "Kill switch activated via API")
+        await _monitoring.alert(
+            "KILL_SWITCH_ACTIVATED", "Kill switch activated via API"
+        )
     return {"kill_switch_enabled": body.enabled}
 
 
@@ -139,4 +141,7 @@ async def ai_summarize(events: list[dict[str, Any]]) -> dict:
 @router.get("/equity-curve")
 async def equity_curve() -> list[dict]:
     # Placeholder series for dashboard wiring
-    return [{"t": f"2024-01-0{i+1}", "equity": str(Decimal("10000") + i * 10)} for i in range(5)]
+    return [
+        {"t": f"2024-01-0{i+1}", "equity": str(Decimal("10000") + i * 10)}
+        for i in range(5)
+    ]

@@ -21,7 +21,9 @@ class ExecutionBackend(Protocol):
 class RiskBlockedError(PermissionError):
     def __init__(self, evaluation: RiskEvaluation) -> None:
         self.evaluation = evaluation
-        super().__init__(f"Order blocked: {evaluation.decision} / {evaluation.reason_code}")
+        super().__init__(
+            f"Order blocked: {evaluation.decision} / {evaluation.reason_code}"
+        )
 
 
 class OrderGateway:
@@ -39,16 +41,23 @@ class OrderGateway:
         evaluation = self.risk_engine.evaluate(request, context)
         if evaluation.decision in (RiskDecision.REJECTED, RiskDecision.HALTED):
             raise RiskBlockedError(evaluation)
-        if evaluation.decision == RiskDecision.REDUCED and evaluation.approved_quantity is not None:
-            request = request.model_copy(update={"quantity": evaluation.approved_quantity})
+        if (
+            evaluation.decision == RiskDecision.REDUCED
+            and evaluation.approved_quantity is not None
+        ):
+            request = request.model_copy(
+                update={"quantity": evaluation.approved_quantity}
+            )
         order = await self.backend.submit(request, evaluation)
         # Tag risk outcome on the order
         return order.model_copy(
             update={
                 "risk_decision": evaluation.decision,
                 "risk_reason_code": evaluation.reason_code,
-                "status": order.status
-                if order.status != OrderStatus.CREATED
-                else OrderStatus.APPROVED,
+                "status": (
+                    order.status
+                    if order.status != OrderStatus.CREATED
+                    else OrderStatus.APPROVED
+                ),
             }
         )

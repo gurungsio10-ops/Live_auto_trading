@@ -44,7 +44,10 @@ async def test_fetch_ohlcv_rejects_unsupported_symbol():
 async def test_fetch_ohlcv_retries_on_failure():
     exchange = MagicMock()
     exchange.fetch_ohlcv = AsyncMock(
-        side_effect=[RuntimeError("rate limit"), [[1_700_000_000_000, 1, 2, 0.5, 1.5, 1]]]
+        side_effect=[
+            RuntimeError("rate limit"),
+            [[1_700_000_000_000, 1, 2, 0.5, 1.5, 1]],
+        ]
     )
     provider = BinanceProvider(exchange=exchange)
     candles = await provider.fetch_ohlcv("BTC/USDT", "1m")

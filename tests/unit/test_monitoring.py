@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.monitoring import ConsoleAlertChannel, HealthRegistry, MonitoringService, WebhookAlertChannel
+from app.monitoring import (
+    ConsoleAlertChannel,
+    HealthRegistry,
+    MonitoringService,
+    WebhookAlertChannel,
+)
 
 
 @pytest.mark.asyncio

@@ -73,7 +73,10 @@ class LiveTradingGate:
         if failed:
             reason = _reason_for(failed[0])
             return LiveGateResult(
-                allowed=False, failed_conditions=failed, reason_code=reason, details=checks
+                allowed=False,
+                failed_conditions=failed,
+                reason_code=reason,
+                details=checks,
             )
         return LiveGateResult(allowed=True, failed_conditions=[], details=checks)
 

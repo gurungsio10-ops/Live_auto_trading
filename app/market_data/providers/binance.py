@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any
 
 import ccxt.async_support as ccxt
 
@@ -33,9 +34,7 @@ class BinanceProvider(MarketDataProvider):
             self._owns_exchange = False
         else:
             use_sandbox = (
-                sandbox
-                if sandbox is not None
-                else settings.exchange_env == "testnet"
+                sandbox if sandbox is not None else settings.exchange_env == "testnet"
             )
             self._exchange = ccxt.binance(
                 {
@@ -124,7 +123,9 @@ class BinanceProvider(MarketDataProvider):
                     quantity_precision=int(precision.get("amount") or 8),
                     min_quantity=Decimal(str(amount_limits.get("min") or "0.0001")),
                     min_notional=Decimal(str(cost_limits.get("min") or "10")),
-                    tick_size=Decimal(str((market.get("info") or {}).get("tickSize") or "0.01")),
+                    tick_size=Decimal(
+                        str((market.get("info") or {}).get("tickSize") or "0.01")
+                    ),
                     step_size=Decimal(
                         str((market.get("info") or {}).get("stepSize") or "0.0001")
                     ),

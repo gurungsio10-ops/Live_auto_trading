@@ -68,7 +68,9 @@ class Settings(BaseSettings):
     def has_exchange_credentials(self) -> bool:
         key = self.exchange_api_key.get_secret_value() if self.exchange_api_key else ""
         secret = (
-            self.exchange_api_secret.get_secret_value() if self.exchange_api_secret else ""
+            self.exchange_api_secret.get_secret_value()
+            if self.exchange_api_secret
+            else ""
         )
         return bool(key.strip() and secret.strip())
 

@@ -15,7 +15,7 @@ from app.backtesting.metrics import PerformanceMetrics, compute_metrics
 from app.backtesting.reports import write_json_report, write_markdown_summary
 from app.models.domain.enums import OrderSide, SignalDirection
 from app.models.domain.market import Candle
-from app.models.domain.trading import PortfolioState, Position, TradeSignal
+from app.models.domain.trading import PortfolioState, Position
 from app.strategies.base import Strategy, StrategyConfig, StrategyContext
 
 
@@ -61,7 +61,9 @@ class BacktestResult:
 class BacktestEngine:
     """Long-only, one position per symbol, event-driven on closed candles."""
 
-    def __init__(self, strategy: Strategy, config: BacktestConfig | None = None) -> None:
+    def __init__(
+        self, strategy: Strategy, config: BacktestConfig | None = None
+    ) -> None:
         self.strategy = strategy
         self.config = config or BacktestConfig()
 
@@ -155,7 +157,10 @@ class BacktestEngine:
                         )
                         bars_held = 0
 
-            elif signal.direction in (SignalDirection.EXIT, SignalDirection.SELL) and position:
+            elif (
+                signal.direction in (SignalDirection.EXIT, SignalDirection.SELL)
+                and position
+            ):
                 fill = self._apply_costs(mark, side=OrderSide.SELL)
                 proceeds = fill["price"] * position.quantity
                 fees = fill["fee"] * position.quantity
@@ -183,7 +188,10 @@ class BacktestEngine:
                     exit_price = position.stop_loss
                     reason = "stop-loss"
                     exited = True
-                elif position.take_profit is not None and bar.high >= position.take_profit:
+                elif (
+                    position.take_profit is not None
+                    and bar.high >= position.take_profit
+                ):
                     exit_price = position.take_profit
                     reason = "take-profit"
                     exited = True
@@ -193,7 +201,9 @@ class BacktestEngine:
                     fees = fill["fee"] * position.quantity
                     slip = fill["slippage_cost"] * position.quantity
                     cash += proceeds - fees
-                    pnl = (fill["price"] - position.entry_price) * position.quantity - fees
+                    pnl = (
+                        fill["price"] - position.entry_price
+                    ) * position.quantity - fees
                     if open_trade:
                         open_trade.exit_time = bar.open_time
                         open_trade.exit_price = fill["price"]
@@ -248,7 +258,9 @@ class BacktestEngine:
         if write_reports:
             self.config.report_dir.mkdir(parents=True, exist_ok=True)
             result.json_path = write_json_report(result, self.config.report_dir)
-            result.markdown_path = write_markdown_summary(result, self.config.report_dir)
+            result.markdown_path = write_markdown_summary(
+                result, self.config.report_dir
+            )
         return result
 
     def _size_position(self, cash: Decimal, price: Decimal) -> Decimal:

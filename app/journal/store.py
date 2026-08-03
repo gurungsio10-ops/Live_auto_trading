@@ -8,8 +8,8 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import JSON, DateTime, Integer, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.time import utc_now
 from app.db.base import Base
@@ -98,7 +98,9 @@ class JournalStore:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def record_signal(self, signal: TradeSignal, *, order_id: str | None = None) -> str:
+    async def record_signal(
+        self, signal: TradeSignal, *, order_id: str | None = None
+    ) -> str:
         sid = uuid4().hex
         self.session.add(
             SignalORM(
@@ -107,9 +109,11 @@ class JournalStore:
                 strategy_version=signal.strategy_version,
                 symbol=signal.symbol,
                 timestamp=signal.timestamp,
-                direction=signal.direction.value
-                if isinstance(signal.direction, SignalDirection)
-                else str(signal.direction),
+                direction=(
+                    signal.direction.value
+                    if isinstance(signal.direction, SignalDirection)
+                    else str(signal.direction)
+                ),
                 confidence=signal.confidence,
                 entry_rationale=signal.entry_rationale,
                 invalidation_condition=signal.invalidation_condition,
@@ -131,12 +135,16 @@ class JournalStore:
             RiskDecisionORM(
                 id=rid,
                 order_idempotency_key=idempotency_key,
-                decision=evaluation.decision.value
-                if isinstance(evaluation.decision, RiskDecision)
-                else str(evaluation.decision),
-                reason_code=evaluation.reason_code.value
-                if isinstance(evaluation.reason_code, RiskReasonCode)
-                else str(evaluation.reason_code),
+                decision=(
+                    evaluation.decision.value
+                    if isinstance(evaluation.decision, RiskDecision)
+                    else str(evaluation.decision)
+                ),
+                reason_code=(
+                    evaluation.reason_code.value
+                    if isinstance(evaluation.reason_code, RiskReasonCode)
+                    else str(evaluation.reason_code)
+                ),
                 approved_quantity=evaluation.approved_quantity,
                 message=evaluation.message,
                 checks=evaluation.checks,
@@ -162,8 +170,12 @@ class JournalStore:
                 status=order.status.value,
                 strategy_name=order.strategy_name,
                 signal_id=order.signal_id,
-                risk_decision=order.risk_decision.value if order.risk_decision else None,
-                risk_reason_code=order.risk_reason_code.value if order.risk_reason_code else None,
+                risk_decision=(
+                    order.risk_decision.value if order.risk_decision else None
+                ),
+                risk_reason_code=(
+                    order.risk_reason_code.value if order.risk_reason_code else None
+                ),
                 fees=order.fees,
                 created_at=order.created_at,
                 updated_at=order.updated_at,
@@ -188,7 +200,12 @@ class JournalStore:
         await self.session.commit()
 
     async def record_system_event(
-        self, event_type: str, message: str, *, severity: str = "info", payload: dict | None = None
+        self,
+        event_type: str,
+        message: str,
+        *,
+        severity: str = "info",
+        payload: dict | None = None,
     ) -> None:
         self.session.add(
             SystemEventORM(

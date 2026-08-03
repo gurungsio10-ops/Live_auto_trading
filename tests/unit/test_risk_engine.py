@@ -167,7 +167,11 @@ def test_max_risk_per_trade_rejects():
 
 
 def test_max_position_exposure():
-    engine = RiskEngine(_settings(max_position_exposure=Decimal("0.0001"), max_risk_per_trade=Decimal("0.5")))
+    engine = RiskEngine(
+        _settings(
+            max_position_exposure=Decimal("0.0001"), max_risk_per_trade=Decimal("0.5")
+        )
+    )
     result = engine.evaluate(
         _request(quantity=Decimal("1"), stop_loss=None, idempotency_key="pos"),
         _ctx(mark_price=Decimal("100000")),
@@ -199,7 +203,9 @@ def test_max_portfolio_exposure():
     )
     result = engine.evaluate(
         _request(quantity=Decimal("0.05"), stop_loss=None, idempotency_key="port"),
-        _ctx(portfolio=_portfolio(open_positions=positions), mark_price=Decimal("100000")),
+        _ctx(
+            portfolio=_portfolio(open_positions=positions), mark_price=Decimal("100000")
+        ),
     )
     assert result.reason_code in {
         RiskReasonCode.MAX_PORTFOLIO_EXPOSURE,
@@ -231,7 +237,11 @@ def test_daily_loss_limit_reached():
     engine = RiskEngine(_settings(max_daily_loss=Decimal("0.03")))
     result = engine.evaluate(
         _request(idempotency_key="daily"),
-        _ctx(portfolio=_portfolio(daily_pnl=Decimal("-400"), peak_equity=Decimal("10000"))),
+        _ctx(
+            portfolio=_portfolio(
+                daily_pnl=Decimal("-400"), peak_equity=Decimal("10000")
+            )
+        ),
     )
     assert result.reason_code == RiskReasonCode.DAILY_LOSS_LIMIT_REACHED
 
@@ -518,7 +528,9 @@ def test_portfolio_exposure_no_room():
     )
     result = engine.evaluate(
         _request(quantity=Decimal("0.01"), stop_loss=None, idempotency_key="noroom"),
-        _ctx(portfolio=_portfolio(open_positions=positions), mark_price=Decimal("100000")),
+        _ctx(
+            portfolio=_portfolio(open_positions=positions), mark_price=Decimal("100000")
+        ),
     )
     assert result.reason_code in {
         RiskReasonCode.MAX_PORTFOLIO_EXPOSURE,

@@ -10,7 +10,7 @@ from app.backtesting.engine import BacktestConfig, BacktestEngine
 from app.models.domain.enums import SignalDirection
 from app.models.domain.market import Candle
 from app.models.domain.trading import TradeSignal
-from app.strategies.base import Strategy, StrategyConfig, StrategyContext
+from app.strategies.base import Strategy, StrategyContext
 from app.strategies.ema_trend import EMATrendStrategy
 
 

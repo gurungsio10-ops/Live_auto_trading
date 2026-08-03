@@ -60,7 +60,9 @@ async def test_sync_symbols_persists(db_session):
     )
     service = MarketDataService(provider, db_session)
     await service.sync_symbols()
-    row = await db_session.scalar(select(SymbolORM).where(SymbolORM.symbol == "BTC/USDT"))
+    row = await db_session.scalar(
+        select(SymbolORM).where(SymbolORM.symbol == "BTC/USDT")
+    )
     assert row is not None
     assert row.base == "BTC"
 
@@ -92,6 +94,7 @@ async def test_sync_ohlcv_rejects_broken_continuity(db_session):
             ),
         ]
     )
+
     # Bypass BinanceProvider mapping — call service with a stub that returns Candles
     class Stub:
         async def fetch_ohlcv(self, *args, **kwargs):

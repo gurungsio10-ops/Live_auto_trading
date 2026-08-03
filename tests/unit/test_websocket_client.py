@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
@@ -40,8 +39,18 @@ async def test_subscribe_dedup_heartbeat_and_stale():
     messages = [
         {"type": "heartbeat"},
         {"id": "1", "sequence": 1, "price": "100", "timestamp": 1_700_000_000_000},
-        {"id": "1", "sequence": 1, "price": "100", "timestamp": 1_700_000_000_000},  # dup
-        {"id": "2", "sequence": 3, "price": "101", "timestamp": 1_700_000_000_100},  # gap
+        {
+            "id": "1",
+            "sequence": 1,
+            "price": "100",
+            "timestamp": 1_700_000_000_000,
+        },  # dup
+        {
+            "id": "2",
+            "sequence": 3,
+            "price": "101",
+            "timestamp": 1_700_000_000_100,
+        },  # gap
     ]
     transport = FakeTransport(messages)
     client = WebSocketMarketDataClient(

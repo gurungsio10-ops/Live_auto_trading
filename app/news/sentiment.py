@@ -38,7 +38,9 @@ class NewsRiskAdjustment:
 
 
 class NewsProvider(Protocol):
-    async def fetch_recent(self, *, symbol: str | None = None) -> list[dict[str, Any]]: ...
+    async def fetch_recent(
+        self, *, symbol: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
 
 class InMemoryNewsProvider:
@@ -83,7 +85,9 @@ class NewsSentimentService:
         return found
 
     def dedup_key(self, item: dict[str, Any]) -> str:
-        return f"{item.get('source')}|{item.get('title')}|{item.get('source_timestamp')}"
+        return (
+            f"{item.get('source')}|{item.get('title')}|{item.get('source_timestamp')}"
+        )
 
     def normalize(self, raw: dict[str, Any]) -> NewsItem | None:
         key = self.dedup_key(raw)
@@ -116,7 +120,9 @@ class NewsSentimentService:
     async def evaluate_for_symbol(self, symbol: str) -> NewsRiskAdjustment:
         raw_items = await self.provider.fetch_recent(symbol=symbol)
         items = [n for r in raw_items if (n := self.normalize(r)) is not None]
-        relevant = [i for i in items if symbol in i.symbols and i.relevance >= Decimal("0.5")]
+        relevant = [
+            i for i in items if symbol in i.symbols and i.relevance >= Decimal("0.5")
+        ]
         if not relevant:
             return NewsRiskAdjustment(action="allow", message="no relevant news")
 
@@ -129,7 +135,9 @@ class NewsSentimentService:
                 message="Blocked under extreme news uncertainty",
             )
 
-        avg_sent = sum((i.sentiment for i in relevant), Decimal("0")) / Decimal(len(relevant))
+        avg_sent = sum((i.sentiment for i in relevant), Decimal("0")) / Decimal(
+            len(relevant)
+        )
         if avg_sent <= self.reduce_threshold:
             return NewsRiskAdjustment(
                 action="reduce",

@@ -25,13 +25,18 @@ class PortfolioService:
         self.peak_equity = cash
 
     def snapshot(self) -> PortfolioState:
-        unrealized = sum((p.unrealized_pnl for p in self.positions.values()), Decimal("0"))
+        unrealized = sum(
+            (p.unrealized_pnl for p in self.positions.values()), Decimal("0")
+        )
         equity = self.cash + sum(
-            (p.quantity * p.current_price for p in self.positions.values()), Decimal("0")
+            (p.quantity * p.current_price for p in self.positions.values()),
+            Decimal("0"),
         )
         self.peak_equity = max(self.peak_equity, equity)
         drawdown = (
-            (self.peak_equity - equity) / self.peak_equity if self.peak_equity > 0 else Decimal("0")
+            (self.peak_equity - equity) / self.peak_equity
+            if self.peak_equity > 0
+            else Decimal("0")
         )
         return PortfolioState(
             cash_balance=self.cash,
