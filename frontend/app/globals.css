@@ -45,6 +45,19 @@ body {
   color: #fff;
 }
 
+/* Keep inputs readable on the dark theme even when Chrome autofills them
+   (default autofill paints a white background, hiding the light text). */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--elevated) inset;
+  box-shadow: 0 0 0 1000px var(--elevated) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 @layer utilities {
   .text-gain {
     color: var(--gain);

@@ -54,7 +54,7 @@ function LoginForm() {
             autoComplete="username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className="mt-1 w-full border border-terminal-border bg-terminal-elevated/60 px-3 py-2 text-sm text-terminal-text outline-none focus:border-terminal-accent"
+            className="mt-1 w-full border border-terminal-border bg-[var(--elevated)] px-3 py-2 text-sm text-terminal-text outline-none focus:border-terminal-accent"
             required
           />
         </label>
@@ -68,7 +68,7 @@ function LoginForm() {
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full border border-terminal-border bg-terminal-elevated/60 px-3 py-2 text-sm text-terminal-text outline-none focus:border-terminal-accent"
+            className="mt-1 w-full border border-terminal-border bg-[var(--elevated)] px-3 py-2 text-sm text-terminal-text outline-none focus:border-terminal-accent"
             required
           />
         </label>
