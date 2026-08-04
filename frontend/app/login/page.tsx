@@ -26,8 +26,17 @@ function LoginForm() {
         body: JSON.stringify({ username, password, remember }),
       });
       if (!res.ok) {
-        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Login failed (${res.status})`);
+        const payload = (await res.json().catch(() => null)) as {
+          error?: string;
+          correlation_id?: string;
+          detail?: { hint?: string; upstream_status?: number | null; endpoint?: string };
+        } | null;
+        const base = payload?.error ?? `Login failed (${res.status})`;
+        const hint = payload?.detail?.hint;
+        const cid = payload?.correlation_id;
+        throw new Error(
+          [base, hint, cid ? `ref ${cid.slice(0, 8)}` : null].filter(Boolean).join(" — "),
+        );
       }
       router.replace(nextPath);
       router.refresh();

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveBackendUrl } from "@/lib/runtime";
 
 /**
  * Proxy SSE from FastAPI /ops/stream. Browser never talks to backend directly.
@@ -6,11 +7,9 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const BACKEND_URL = process.env.ATLAS_BACKEND_URL ?? "http://127.0.0.1:8000";
-
 export async function GET() {
   try {
-    const upstream = await fetch(`${BACKEND_URL}/ops/stream`, {
+    const upstream = await fetch(`${resolveBackendUrl()}/ops/stream`, {
       headers: { Accept: "text/event-stream" },
       cache: "no-store",
     });

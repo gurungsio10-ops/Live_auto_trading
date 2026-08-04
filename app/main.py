@@ -17,6 +17,7 @@ from app.api.mvp import router as mvp_router
 from app.api.routes import router as api_router
 from app.api.v1 import router as v1_router
 from app.core.config import get_settings
+from app.core.cors import resolve_cors_origins
 from app.core.errors import AtlasError, ConfigurationError, LiveTradingDisabledError
 from app.core.logging import configure_logging
 from app.core.security import redact_settings
@@ -100,13 +101,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Strict CORS for the ops dashboard origins only.
-_origins = [
-    o.strip() for o in (settings.cors_allowed_origins or "").split(",") if o.strip()
-]
+# Strict CORS for the ops dashboard origins only (no wildcard with credentials).
+# Codespaces forwarded HTTPS frontend origin is auto-appended when detected.
+_origins = resolve_cors_origins(settings.cors_allowed_origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins or ["http://127.0.0.1:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
