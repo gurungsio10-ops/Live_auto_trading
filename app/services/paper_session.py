@@ -1364,6 +1364,8 @@ async def bootstrap_paper_runtime() -> None:
             await hydrate_paper_session_from_db(session)
             keys = await paper_cycle.load_persisted_cycle_keys(session)
             paper_cycle.set_processed_cycle_keys(keys)
+        # DB reachable — clear sticky DATABASE_UNHEALTHY from prior crashes.
+        get_paper_session().risk_engine.state.database_healthy = True
         # Startup reconciliation — fail-closed via risk engine flag.
         try:
             from app.services.reconciliation import run_paper_reconciliation

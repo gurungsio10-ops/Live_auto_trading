@@ -35,8 +35,12 @@ async def test_root_health_ready_metrics_config():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         h = await client.get("/health")
         assert h.status_code == 200
-        assert h.json()["status"] == "ok"
-        assert "PAPER" in h.json()["banner"]
+        body = h.json()
+        assert body["status"] == "ok"
+        assert "PAPER" in body["banner"]
+        assert "database" in body
+        assert "ok" in body["database"]
+        assert "risk_flag" in body["database"]
 
         r = await client.get("/ready")
         assert r.status_code == 200

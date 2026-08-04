@@ -171,6 +171,10 @@ async def health() -> dict[str, Any]:
 
     s = get_settings()
     session = get_paper_session()
+    db_ok = await _probe_database()
+    # Heal sticky DATABASE_UNHEALTHY once the live probe succeeds again.
+    if db_ok and not session.risk_engine.state.database_healthy:
+        session.risk_engine.state.database_healthy = True
     return {
         "status": "ok",
         "trading_mode": s.trading_mode,
@@ -178,6 +182,11 @@ async def health() -> dict[str, Any]:
         "live_trading_enabled": s.live_trading_enabled,
         "kill_switch_enabled": session.kill_switch_enabled or s.kill_switch_enabled,
         "exchange_env": s.exchange_env,
+        "database": {
+            "ok": db_ok,
+            "risk_flag": session.risk_engine.state.database_healthy,
+            "detail": "ok" if db_ok else "probe_failed",
+        },
         "scheduler": scheduler_status(),
         "reconciliation": reconciliation_status(),
         "market_data": get_market_data_hub().status(),
@@ -199,7 +208,12 @@ async def ready() -> dict[str, Any]:
             "database_ok": False,
         }
     db_ok = await _probe_database()
+    session = get_paper_session()
+    if db_ok and not session.risk_engine.state.database_healthy:
+        # Recover from transient persist failures once DB is reachable again.
+        session.risk_engine.state.database_healthy = True
     if not db_ok:
+        session.risk_engine.state.database_healthy = False
         return {
             "status": "not_ready",
             "reason": "database probe failed",
@@ -221,6 +235,7 @@ async def ready() -> dict[str, Any]:
         "runtime_mode": s.runtime_mode.value,
         "database_ok": True,
         "reconciliation_healthy": recon_ok,
+        "database_risk_flag": session.risk_engine.state.database_healthy,
     }
 
 
