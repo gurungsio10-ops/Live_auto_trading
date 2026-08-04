@@ -26,9 +26,12 @@ dev:
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend-dev:
-	ADMIN_API_TOKEN=$${ADMIN_API_TOKEN:-local-dev-admin-token} \
-	ATLAS_BACKEND_URL=http://127.0.0.1:8000 \
-	npm --prefix frontend run dev
+	ADMIN_API_TOKEN=local-dev-admin-token \
+ATLAS_BACKEND_URL=http://127.0.0.1:8000 \
+npm --prefix frontend run dev
+
+# Production-ish local stack (Postgres + API image)
+docker compose up -d --build
 
 test:
 	pytest -q
