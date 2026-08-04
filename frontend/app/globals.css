@@ -3,41 +3,64 @@
 @tailwind utilities;
 
 :root {
+  /* Surfaces */
   --bg: #070a0d;
   --panel: #0d1218;
   --elevated: #131b24;
   --border: #243041;
   --muted: #1a2432;
+
+  /* Text */
   --text: #e7eef7;
-  --dim: #8a9bb0;
+  --dim: #9aabbf;
+
+  /* Semantic */
   --accent: #3ddeb5;
   --gain: #3ddeb5;
   --loss: #ff6b6b;
   --warn: #f0c14b;
   --danger: #ff4d4f;
+  --info: #6cb6ff;
   --live: #ff2d55;
-  --grid: rgba(61, 222, 181, 0.06);
+  --focus: #3ddeb5;
+  --grid: rgba(61, 222, 181, 0.05);
+
+  /* Shape */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --shadow: 0 0 0 1px var(--border), 0 12px 40px rgba(0, 0, 0, 0.45);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html,
 body {
   min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
   margin: 0;
   color: var(--text);
   background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(61, 222, 181, 0.08), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(240, 193, 75, 0.05), transparent 50%),
-    linear-gradient(180deg, #0a0f14 0%, var(--bg) 40%, #050709 100%);
+    radial-gradient(1000px 520px at 8% -8%, rgba(61, 222, 181, 0.07), transparent 55%),
+    linear-gradient(180deg, #0a0f14 0%, var(--bg) 42%, #050709 100%);
   background-attachment: fixed;
   font-family: var(--font-mono), ui-monospace, monospace;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 ::selection {
@@ -45,8 +68,12 @@ body {
   color: #fff;
 }
 
-/* Keep inputs readable on the dark theme even when Chrome autofills them
-   (default autofill paints a white background, hiding the light text). */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Keep inputs readable on the dark theme even when Chrome autofills them. */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
@@ -56,6 +83,21 @@ input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0 1000px var(--elevated) inset;
   box-shadow: 0 0 0 1000px var(--elevated) inset;
   transition: background-color 9999s ease-in-out 0s;
+}
+
+/* Prefer ≥16px inputs on mobile to avoid iOS Safari zoom. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 @layer utilities {
@@ -76,9 +118,13 @@ input:-webkit-autofill:active {
       0deg,
       transparent,
       transparent 2px,
-      rgba(0, 0, 0, 0.08) 2px,
-      rgba(0, 0, 0, 0.08) 4px
+      rgba(0, 0, 0, 0.06) 2px,
+      rgba(0, 0, 0, 0.06) 4px
     );
+  }
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
   }
 }
 
@@ -86,11 +132,11 @@ input:-webkit-autofill:active {
   0%,
   100% {
     opacity: 1;
-    box-shadow: 0 0 0 0 rgba(255, 45, 85, 0.55);
+    box-shadow: 0 0 0 0 rgba(255, 45, 85, 0.45);
   }
   50% {
     opacity: 0.92;
-    box-shadow: 0 0 0 10px rgba(255, 45, 85, 0);
+    box-shadow: 0 0 0 8px rgba(255, 45, 85, 0);
   }
 }
 
@@ -111,4 +157,11 @@ input:-webkit-autofill:active {
 
 .animate-pulse-live {
   animation: pulse-live 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-pulse-live {
+    animation: none;
+  }
 }

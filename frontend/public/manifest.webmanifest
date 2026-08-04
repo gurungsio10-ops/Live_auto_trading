@@ -1,0 +1,26 @@
+{
+  "name": "Project Atlas",
+  "short_name": "Atlas",
+  "description": "Personal Automated Trading Intelligence — paper trading console",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070a0d",
+  "theme_color": "#070a0d",
+  "orientation": "any",
+  "lang": "en",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

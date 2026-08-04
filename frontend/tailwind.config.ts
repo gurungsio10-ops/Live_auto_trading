@@ -22,6 +22,8 @@ const config: Config = {
           warn: "var(--warn)",
           danger: "var(--danger)",
           live: "var(--live)",
+          info: "var(--info)",
+          focus: "var(--focus)",
         },
       },
       fontFamily: {
@@ -29,7 +31,13 @@ const config: Config = {
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        terminal: "0 0 0 1px var(--border), 0 12px 40px rgba(0,0,0,0.45)",
+        terminal: "var(--shadow)",
+      },
+      minHeight: {
+        touch: "44px",
+      },
+      minWidth: {
+        touch: "44px",
       },
     },
   },

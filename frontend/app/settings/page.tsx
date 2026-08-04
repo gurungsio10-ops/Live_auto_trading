@@ -6,17 +6,22 @@ import { DemoBanner } from "@/components/ui/DemoBanner";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { TradingModeIndicator } from "@/components/TradingModeIndicator";
+import { DeveloperAttribution } from "@/components/brand/DeveloperAttribution";
+import { OwnerAvatar } from "@/components/brand/OwnerAvatar";
 import { useAsyncData } from "@/lib/use-async-data";
-import { formatPct } from "@/lib/format";
+import { formatMoney, formatPct } from "@/lib/format";
+import { BRAND } from "@/lib/brand";
 import type { SettingsView } from "@/lib/types";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-terminal-border/70 py-2 text-xs">
-      <span className="font-display uppercase tracking-[0.1em] text-terminal-dim">
+    <div className="flex min-w-0 items-center justify-between gap-4 border-b border-terminal-border/70 py-2.5 text-xs">
+      <span className="shrink-0 font-display uppercase tracking-[0.1em] text-terminal-dim">
         {label}
       </span>
-      <span className="font-mono tabular-nums text-terminal-text">{value}</span>
+      <span className="min-w-0 truncate text-right font-mono tabular-nums text-terminal-text">
+        {value}
+      </span>
     </div>
   );
 }
@@ -113,7 +118,7 @@ export default function SettingsPage() {
               />
               <Row
                 label="Min order notional"
-                value={`$${data.risk_limits.min_order_notional}`}
+                value={formatMoney(data.risk_limits.min_order_notional)}
               />
               <Row
                 label="Default leverage"
@@ -121,6 +126,26 @@ export default function SettingsPage() {
               />
             </Card>
           </div>
+
+          <Card title="About" subtitle="Product identity">
+            <div className="flex items-start gap-4">
+              <OwnerAvatar size="lg" />
+              <div className="min-w-0 space-y-2">
+                <p className="font-display text-lg tracking-[0.12em] text-terminal-accent">
+                  {BRAND.wordmark}
+                </p>
+                <p className="text-sm text-terminal-text">{BRAND.subtitle}</p>
+                <DeveloperAttribution />
+                <p className="text-[11px] leading-relaxed text-terminal-dim">
+                  Paper trading only. Live money, futures, leverage &gt; 1x, and withdrawals remain
+                  out of scope for this console.
+                </p>
+                <p className="text-[10px] font-mono text-terminal-dim">
+                  Owner photo path (optional): {BRAND.ownerImageFsPath}
+                </p>
+              </div>
+            </div>
+          </Card>
         </>
       )}
     </div>

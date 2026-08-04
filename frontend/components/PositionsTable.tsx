@@ -1,10 +1,11 @@
 "use client";
 
 import type { Position } from "@/lib/types";
-import { formatMoney, formatQty, formatTs, pnlTone } from "@/lib/format";
-import { Table, Td } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
+import { Table, Td } from "@/components/ui/Table";
+import { MobileRecordCard, RecordRow } from "@/components/data/MobileRecordCard";
+import { MoneyValue, PnlValue, QuantityValue, TimestampValue } from "@/components/values";
 
 export function PositionsTable({
   positions,
@@ -25,63 +26,117 @@ export function PositionsTable({
   }
 
   return (
-    <Table
-      headers={[
-        "Symbol",
-        "Qty",
-        "Entry",
-        "Mark",
-        "uP&L",
-        "rP&L",
-        "Strategy",
-        "Opened",
-        "Stop",
-        "Target",
-        "",
-      ]}
-    >
-      {positions.map((p) => {
-        const uTone = pnlTone(p.unrealized_pnl);
-        const rTone = pnlTone(p.realized_pnl);
-        return (
-          <tr key={`${p.symbol}-${p.opened_at}`} className="hover:bg-terminal-muted/40">
-            <Td className="text-terminal-accent">{p.symbol}</Td>
-            <Td>{formatQty(p.quantity)}</Td>
-            <Td>{formatMoney(p.entry_price)}</Td>
-            <Td>{formatMoney(p.current_price)}</Td>
-            <Td
-              className={
-                uTone === "gain" ? "text-gain" : uTone === "loss" ? "text-loss" : ""
-              }
-            >
-              {formatMoney(p.unrealized_pnl)}
-            </Td>
-            <Td
-              className={
-                rTone === "gain" ? "text-gain" : rTone === "loss" ? "text-loss" : ""
-              }
-            >
-              {formatMoney(p.realized_pnl)}
-            </Td>
-            <Td>{p.strategy_name ?? "—"}</Td>
-            <Td className="text-terminal-dim">{formatTs(p.opened_at)}</Td>
-            <Td>{p.stop_loss ? formatMoney(p.stop_loss) : "—"}</Td>
-            <Td>{p.take_profit ? formatMoney(p.take_profit) : "—"}</Td>
-            <Td>
-              {onClose && (
+    <>
+      {/* Mobile cards */}
+      <div className="space-y-2 md:hidden">
+        {positions.map((p) => (
+          <MobileRecordCard
+            key={`${p.symbol}-${p.opened_at}`}
+            title={p.symbol}
+            subtitle={p.strategy_name ?? "Paper position"}
+            primary={
+              <>
+                <RecordRow label="Qty" value={<QuantityValue value={p.quantity} />} />
+                <RecordRow label="uP&L" value={<PnlValue value={p.unrealized_pnl} compact />} />
+                <RecordRow label="Mark" value={<MoneyValue value={p.current_price} compact />} />
+              </>
+            }
+            details={
+              <>
+                <RecordRow label="Entry" value={<MoneyValue value={p.entry_price} />} />
+                <RecordRow label="Realized" value={<PnlValue value={p.realized_pnl} />} />
+                <RecordRow label="Opened" value={<TimestampValue value={p.opened_at} compact />} />
+                <RecordRow
+                  label="Stop"
+                  value={p.stop_loss ? <MoneyValue value={p.stop_loss} /> : "—"}
+                />
+                <RecordRow
+                  label="Target"
+                  value={p.take_profit ? <MoneyValue value={p.take_profit} /> : "—"}
+                />
+              </>
+            }
+            actions={
+              onClose ? (
                 <Button
                   variant="danger"
                   type="button"
+                  className="w-full"
                   disabled={closingSymbol === p.symbol}
-                  onClick={() => onClose(p.symbol)}
+                  onClick={() => {
+                    const ok = window.confirm(`Close paper position ${p.symbol}?`);
+                    if (ok) onClose(p.symbol);
+                  }}
                 >
-                  {closingSymbol === p.symbol ? "Closing…" : "Close"}
+                  {closingSymbol === p.symbol ? "Closing…" : "Close position"}
                 </Button>
-              )}
-            </Td>
-          </tr>
-        );
-      })}
-    </Table>
+              ) : undefined
+            }
+          />
+        ))}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block">
+        <Table
+          headers={[
+            "Symbol",
+            "Qty",
+            "Entry",
+            "Mark",
+            "uP&L",
+            "rP&L",
+            "Strategy",
+            "Opened",
+            "Stop",
+            "Target",
+            "",
+          ]}
+        >
+          {positions.map((p) => (
+            <tr key={`${p.symbol}-${p.opened_at}`} className="hover:bg-terminal-muted/40">
+              <Td className="text-terminal-accent">{p.symbol}</Td>
+              <Td>
+                <QuantityValue value={p.quantity} />
+              </Td>
+              <Td>
+                <MoneyValue value={p.entry_price} />
+              </Td>
+              <Td>
+                <MoneyValue value={p.current_price} />
+              </Td>
+              <Td>
+                <PnlValue value={p.unrealized_pnl} />
+              </Td>
+              <Td>
+                <PnlValue value={p.realized_pnl} />
+              </Td>
+              <Td>{p.strategy_name ?? "—"}</Td>
+              <Td>
+                <TimestampValue value={p.opened_at} compact />
+              </Td>
+              <Td>{p.stop_loss ? <MoneyValue value={p.stop_loss} /> : "—"}</Td>
+              <Td>{p.take_profit ? <MoneyValue value={p.take_profit} /> : "—"}</Td>
+              <Td>
+                {onClose && (
+                  <Button
+                    variant="danger"
+                    type="button"
+                    size="sm"
+                    disabled={closingSymbol === p.symbol}
+                    onClick={() => {
+                      const ok = window.confirm(`Close paper position ${p.symbol}?`);
+                      if (ok) onClose(p.symbol);
+                    }}
+                  >
+                    {closingSymbol === p.symbol ? "Closing…" : "Close"}
+                  </Button>
+                )}
+              </Td>
+            </tr>
+          ))}
+        </Table>
+      </div>
+    </>
   );
 }

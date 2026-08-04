@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
 
 export function KillSwitchControl({
   active,
@@ -16,11 +17,19 @@ export function KillSwitchControl({
   const [error, setError] = useState<string | null>(null);
 
   async function toggle() {
+    const next = !active;
+    const ok = window.confirm(
+      next
+        ? "Activate the kill switch?\n\nThis halts all new paper order submissions until deactivated."
+        : "Deactivate the kill switch?\n\nNew paper orders may be submitted again subject to risk checks.",
+    );
+    if (!ok) return;
+
     setPending(true);
     setError(null);
     try {
       const res = await api.post<{ kill_switch_enabled: boolean }>("/api/kill-switch", {
-        enabled: !active,
+        enabled: next,
       });
       onChanged?.(res.data.kill_switch_enabled);
     } catch (err) {
@@ -31,31 +40,35 @@ export function KillSwitchControl({
   }
 
   return (
-    <div className="border border-terminal-border bg-terminal-elevated/60 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="font-display text-xs uppercase tracking-[0.14em] text-terminal-text">
-            Kill switch
-          </p>
-          <p className="mt-1 text-[11px] text-terminal-dim">
-            Halts all new order submissions when active.
-          </p>
-        </div>
+    <Card
+      title="Kill switch"
+      subtitle="Protected control — confirmation required"
+      actions={
         <Badge tone={active ? "danger" : "accent"}>
           {active ? "ACTIVE — HALTED" : "ARMED / CLEAR"}
         </Badge>
-      </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      }
+    >
+      <p className="text-[12px] leading-relaxed text-terminal-dim">
+        Halts all new order submissions when active. Kept away from the mobile bottom bar to
+        reduce accidental taps.
+      </p>
+      <div className="mt-4">
         <Button
           variant={active ? "secondary" : "danger"}
           disabled={pending}
           onClick={toggle}
           type="button"
+          className="w-full sm:w-auto"
         >
           {pending ? "Updating…" : active ? "Deactivate kill switch" : "Activate kill switch"}
         </Button>
       </div>
-      {error && <p className="mt-2 text-[11px] text-terminal-loss font-mono">{error}</p>}
-    </div>
+      {error && (
+        <p className="mt-2 text-[11px] font-mono text-terminal-loss" role="alert">
+          {error}
+        </p>
+      )}
+    </Card>
   );
 }
