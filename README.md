@@ -78,9 +78,25 @@ ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 np
 ```
 
 Open http://localhost:3000 — login `admin` / `atlas` (dev defaults). Recovery panel: `/recovery`.
-GitHub Codespaces: see `docs/operations/codespaces.md` (`./scripts/codespaces_up.sh`).
 
 `ADMIN_API_TOKEN` is used only in Next.js **server** BFF routes — never expose it to browser JS.
+
+## GitHub Codespaces
+
+Codespaces **auto-starts** the paper stack on container start via `.devcontainer/postStartCommand` (PostgreSQL + Redis + FastAPI `:8000` + Next.js `:3000`). Startup runs in the background so the editor is not blocked; track it with `tail -f .run/logs/poststart.log`.
+
+Codespaces **stop when idle** and are **not** 24/7 hosting — restart the Codespace (or run the start script) after it sleeps.
+
+| Action | Command |
+|--------|---------|
+| Manual start | `./scripts/codespaces_start.sh` |
+| Status | `./scripts/codespaces_status.sh` |
+| Stop | `./scripts/codespaces_stop.sh` |
+| Restart | `./scripts/codespaces_restart.sh` |
+
+Open the forwarded **port 3000** URL (`Ports` panel → 3000 → Open in Browser). Login defaults are in `docs/operations/codespaces.md`.
+
+Troubleshoot with logs under `.run/logs/` (`backend.log`, `frontend.log`, `poststart.log`). Full runbook: `docs/operations/codespaces.md`.
 
 ## Run one paper cycle
 

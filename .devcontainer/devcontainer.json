@@ -1,0 +1,53 @@
+{
+  "name": "Atlas Paper Dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "forwardPorts": [3000, 8000, 5432, 6379],
+  "portsAttributes": {
+    "3000": {
+      "label": "Atlas Dashboard",
+      "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "Atlas API",
+      "onAutoForward": "silent"
+    },
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    },
+    "6379": {
+      "label": "Redis",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "bash -lc 'python3 -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e \".[dev]\" && npm --prefix frontend ci --no-fund --no-audit && test -f .env || cp .env.example .env && test -f frontend/.env.local || cp frontend/.env.example frontend/.env.local'",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+      }
+    }
+  },
+  "remoteUser": "vscode",
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "32gb"
+  }
+}
