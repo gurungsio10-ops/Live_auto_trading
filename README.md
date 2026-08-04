@@ -78,6 +78,7 @@ ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 np
 ```
 
 Open http://localhost:3000 — login `admin` / `atlas` (dev defaults). Recovery panel: `/recovery`.
+GitHub Codespaces: see `docs/operations/codespaces.md` (`./scripts/codespaces_up.sh`).
 
 `ADMIN_API_TOKEN` is used only in Next.js **server** BFF routes — never expose it to browser JS.
 
