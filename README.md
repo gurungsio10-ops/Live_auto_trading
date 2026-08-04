@@ -2,34 +2,40 @@
 
 Safe, deterministic, personal cryptocurrency **paper** trading platform.
 
-**Paper mode is the default.** Live money trading is not implemented. AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py`).
+**Paper mode is the default.** Live money trading is hard-blocked. AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py`).
 
-## Architecture summary
+Banner: **PAPER TRADING — NO REAL FUNDS**
+
+## Architecture
 
 ```text
-Market data → candle validation → EMA strategy → signal → risk engine
-  → paper broker → fill → portfolio (WAC) → journal → /api/v1 → dashboard
+Market data → candle validation → EMA(+RSI) strategy → signal → risk engine
+  → paper broker → fill → portfolio (WAC) → journal → /api + /api/v1 → dashboard
 ```
 
-Key packages: `app/market_data`, `app/strategies`, `app/risk`, `app/execution`, `app/services` (orchestrator + paper cycle), `app/journal`, `app/api`, `frontend/`.
+See `docs/ARCHITECTURE.md`, `docs/CURRENT_STATE.md`, `docs/IMPLEMENTATION_PLAN.md`.
 
-Docs:
-
-- `docs/CURRENT_STATE_AUDIT.md` — verified audit (prefer over older status %)
-- `docs/PAPER_TRADING_RUNBOOK.md` — start/stop/cycle/kill-switch/reset
-- `docs/IMPLEMENTATION_REPORT.md` — this hardening pass
-- `docs/ROADMAP.md`
-- `docs/architecture/paper_trading_flow.md`
-- `docs/architecture/risk_controls.md`
-- `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
-
-## Local setup
+## Quick start (Makefile)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
+make setup
+make migrate
+make dev                 # FastAPI on :8000
+# other terminal:
+make frontend-dev        # Next.js on :3000
+make paper-cycle         # one simulated trade cycle
+make test
+make lint
+make typecheck
+```
+
+## Manual setup
+
+```bash
 pip install -e ".[dev]"
 cp .env.example .env
-# Keep ATLAS_RUNTIME_MODE=PAPER / TRADING_MODE=paper / ENABLE_LIVE_TRADING=false
+# Keep TRADING_MODE=paper, TRADING_ENABLED=false, ENABLE_LIVE_TRADING=false
 alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -41,118 +47,50 @@ cd frontend && npm ci
 ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-One paper cycle:
+Open http://localhost:3000 — login `admin` / `atlas` (dev defaults).
+
+## Paper cycle (MVP API)
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
+# One-shot cycle (works even when TRADING_ENABLED=false)
+curl -s -X POST http://127.0.0.1:8000/api/trading/cycle \
   -H 'Content-Type: application/json' \
-  -d '{"symbol":"BTC/USDT","timeframe":"1m"}'
-```
+  -H "X-Admin-Token: local-dev-admin-token" \
+  -d '{"confirm":"RUN_ONE_CYCLE","symbol":"BTC/USDT","timeframe":"5m"}'
 
-See `docs/PAPER_TRADING_RUNBOOK.md` for pause, kill switch, reset, and restart behaviour.
-## Docker setup
-
-```bash
-docker compose up -d   # PostgreSQL + Redis
-```
-
-Point `DATABASE_URL` at the compose Postgres instance (asyncpg URL). App processes still run on the host (or your own image) for development.
-
-## Environment variables
-
-See `.env.example`. Critical:
-
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `TRADING_MODE` | `paper` | Must stay paper for this milestone |
-| `KILL_SWITCH_ENABLED` | `false` | Global halt for new orders |
-| `ADMIN_API_TOKEN` | (unset) | Required for mutating `/api/v1` system routes |
-| `PAPER_STARTING_BALANCE` | `10000` | Quote currency (USDT) |
-| `PAPER_FEE_BPS` / `PAPER_SLIPPAGE_BPS` | `10` / `5` | Simulated costs |
-| `ALLOWED_SYMBOLS` | `BTC/USDT` | Risk allowlist |
-| Risk `*_PERCENT` | see example | Accepts `1` or `0.01` for 1% |
-
-Never commit real secrets.
-
-## Database migrations
-
-```bash
-alembic upgrade head   # 0001..0004
-```
-
-## Running backend / frontend
-
-```bash
-uvicorn app.main:app --reload
-npm --prefix frontend run dev
-```
-
-Health: `GET /health`, `GET /api/v1/health`, `GET /api/v1/system/status`.
-
-## Run one paper cycle
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
+# Or enable continuous paper mode, then cycle without one-shot confirm:
+curl -s -X POST http://127.0.0.1:8000/api/trading/start \
   -H 'Content-Type: application/json' \
-  -d '{"symbol":"BTC/USDT","timeframe":"1m","strategy_id":"ema_crossover"}'
+  -H "X-Admin-Token: local-dev-admin-token" \
+  -d '{"confirm":"START_PAPER_TRADING"}'
 ```
 
-Or use **Run one paper cycle** on the overview dashboard (simulated results only).
+Legacy path still works: `POST /api/v1/paper/cycle/run`.
 
-CLI offline replay:
+## Docker
 
 ```bash
-python -m app.cli paper-run --offline --duration-minutes 0
+docker compose up -d          # Postgres + Redis
+docker build -t atlas-api .   # optional API image (paper-only env)
 ```
 
-## Tests / quality
+## Safety
 
-```bash
-pytest -q
-ruff check app tests
-ruff format --check app tests
-mypy app
-alembic upgrade head
-npm --prefix frontend run lint
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
-```
+| Control | Default |
+|---------|---------|
+| `TRADING_MODE` | `paper` |
+| `TRADING_ENABLED` | `false` |
+| `ENABLE_LIVE_TRADING` | `false` |
+| Futures / leverage / withdrawals | blocked by `SafetyGuard` |
+| Live order submission | hard-blocked |
 
-CI: `.github/workflows/ci.yml`.
-
-## Safety model
-
-- Decimal-only money; timezone-aware UTC timestamps
-- No secrets in logs (`app/core/security.redact`)
-- Kill switch blocks new orders; reads remain available
-- Paper reset requires `confirm=RESET_PAPER_ACCOUNT` + admin token
-- Live execution raises `LiveTradingDisabledError`
-
-## Paper versus live
-
-| Mode | Status |
-|------|--------|
-| Paper | Supported end-to-end for BTC/USDT |
-| Live | Disabled — see live readiness checklist (unchecked) |
+Never commit real API keys. Mutating controls require `ADMIN_API_TOKEN`.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Binance HTTP 451 | Geo-block; use `--offline` or another public exchange |
-| `no such table` | `alembic upgrade head` |
-| Demo banner in UI | Start backend; set `ATLAS_BACKEND_URL` |
-| 503 on kill-switch/reset | Set `ADMIN_API_TOKEN` on API (and Next server for reset proxy) |
-| Startup fails with live mode | Expected — keep `TRADING_MODE=paper` |
-
-## Current limitations
-
-- In-memory paper session resets on process restart (journal tables exist for durable audit when wired with a DB session)
-- Public Binance may be unreachable from some networks
-- Backtests share strategy rules but do not always share the live risk gateway path
-- Live order execution is intentionally unimplemented
-- Simulated / backtest results **do not guarantee future performance**
-
-## Warnings
-
-This is **not** ready for live money. Passing tests validate paper trading only.
+| `401` on cycle/kill-switch | Set `ADMIN_API_TOKEN` and send `X-Admin-Token` |
+| Yellow “Demo data” banner | Backend unreachable — start uvicorn |
+| `409 TRADING_ENABLED is false` | Pass `confirm=RUN_ONE_CYCLE` or call `/api/trading/start` |
+| LIVE startup error | Keep `TRADING_MODE=paper` |
