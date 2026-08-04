@@ -13,7 +13,8 @@ Market data → candle validation → EMA(+RSI) strategy → signal → risk eng
   → paper broker → fill → portfolio (WAC) → journal → /api + /api/v1 → dashboard
 ```
 
-See `docs/ARCHITECTURE.md`, `docs/CURRENT_STATE.md`, `docs/IMPLEMENTATION_PLAN.md`.
+See `docs/architecture/system_overview.md`, `docs/audit/repository_consolidation_report.md`,
+`docs/audit/final_verification_report.md`, and `SECURITY.md`.
 
 ## Quick start (Makefile)
 
