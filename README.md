@@ -54,15 +54,16 @@ Open http://localhost:3000 — login `admin` / `atlas` (dev defaults).
 
 ```bash
 # One-shot cycle (works even when TRADING_ENABLED=false)
+# ADMIN_API_TOKEN comes from .env / .env.example (local-dev placeholder).
 curl -s -X POST http://127.0.0.1:8000/api/trading/cycle \
   -H 'Content-Type: application/json' \
-  -H "X-Admin-Token: local-dev-admin-token" \
+  -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
   -d '{"confirm":"RUN_ONE_CYCLE","symbol":"BTC/USDT","timeframe":"5m"}'
 
 # Or enable continuous paper mode, then cycle without one-shot confirm:
 curl -s -X POST http://127.0.0.1:8000/api/trading/start \
   -H 'Content-Type: application/json' \
-  -H "X-Admin-Token: local-dev-admin-token" \
+  -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
   -d '{"confirm":"START_PAPER_TRADING"}'
 ```
 

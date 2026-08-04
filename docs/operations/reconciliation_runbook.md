@@ -22,5 +22,5 @@
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/reconciliation/run \
-  -H 'X-Admin-Token: local-dev-admin-token'
+  -H "X-Admin-Token: ${ADMIN_API_TOKEN}"
 ```

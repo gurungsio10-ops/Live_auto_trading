@@ -1,0 +1,15 @@
+# Project Atlas — gitleaks configuration
+# Extends the default ruleset. The string "local-dev-admin-token" is the
+# documented non-production ADMIN_API_TOKEN placeholder from .env.example /
+# docker-compose and appears in curl examples; it is not a live credential.
+
+title = "Atlas gitleaks"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented local-dev ADMIN_API_TOKEN placeholder (paper/dev only)"
+regexes = [
+  '''local-dev-admin-token''',
+]

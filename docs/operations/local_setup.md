@@ -27,6 +27,6 @@ Paper cycle (admin token required):
 ```bash
 curl -X POST http://127.0.0.1:8000/api/trading/cycle \
   -H 'Content-Type: application/json' \
-  -H 'X-Admin-Token: local-dev-admin-token' \
+  -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
   -d '{"confirm":"RUN_ONE_CYCLE","symbol":"BTC/USDT","timeframe":"5m"}'
 ```
