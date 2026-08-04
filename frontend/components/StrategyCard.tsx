@@ -3,8 +3,9 @@
 import { useState } from "react";
 import type { Strategy, StrategyGovernanceStatus } from "@/lib/types";
 import { api } from "@/lib/api-client";
-import { Badge } from "@/components/ui/Badge";
+import { Badge, PaperTradingBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { SectionCard } from "@/components/ui/SectionCard";
 
 function statusTone(status: StrategyGovernanceStatus) {
   switch (status) {
@@ -12,13 +13,13 @@ function statusTone(status: StrategyGovernanceStatus) {
       return "live" as const;
     case "PAPER":
     case "TESTNET":
-      return "accent" as const;
+      return "primary" as const;
     case "VALIDATED":
-      return "gain" as const;
+      return "positive" as const;
     case "BACKTESTING":
-      return "warn" as const;
+      return "warning" as const;
     case "RETIRED":
-      return "loss" as const;
+      return "negative" as const;
     default:
       return "neutral" as const;
   }
@@ -67,39 +68,34 @@ export function StrategyCard({
   }
 
   return (
-    <article className="border border-terminal-border bg-terminal-panel/80 p-4 shadow-terminal animate-fade-up">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h3 className="font-display text-base tracking-wide text-terminal-text">
-            {strategy.name}
-          </h3>
-          <p className="mt-1 font-mono text-[11px] text-terminal-dim">
-            {strategy.strategy_id} · v{strategy.version} · {strategy.timeframe}
-          </p>
-        </div>
+    <SectionCard
+      title={strategy.name}
+      description={strategy.description}
+      actions={
         <div className="flex flex-wrap gap-1.5">
           <Badge tone={statusTone(strategy.governance_status)}>
             {strategy.governance_status}
           </Badge>
-          {strategy.selected && <Badge tone="accent">Selected</Badge>}
-          {strategy.running && <Badge tone="gain">Running</Badge>}
+          <PaperTradingBadge />
+          {strategy.selected ? <Badge tone="primary">Selected</Badge> : null}
+          {strategy.running ? <Badge tone="positive">Running</Badge> : null}
         </div>
-      </div>
-      <p className="mt-3 text-xs text-terminal-dim leading-relaxed">{strategy.description}</p>
-      <p className="mt-2 font-mono text-[11px] text-terminal-dim">
-        {strategy.symbols.join(", ")}
+      }
+    >
+      <p className="font-mono text-xs text-muted">
+        {strategy.strategy_id} · v{strategy.version} · {strategy.timeframe}
+      </p>
+      <p className="mt-2 text-sm text-secondary">
+        {strategy.symbols.length ? strategy.symbols.join(", ") : "Symbols not available"}
       </p>
 
-      {canPaperControl && Object.keys(params).length > 0 && (
+      {canPaperControl && Object.keys(params).length > 0 ? (
         <div className="mt-4 grid grid-cols-2 gap-2">
           {Object.entries(params).map(([key, value]) => (
-            <label
-              key={key}
-              className="block text-[10px] uppercase tracking-[0.1em] text-terminal-dim"
-            >
+            <label key={key} className="block text-xs text-muted">
               {key}
               <input
-                className="mt-1 w-full border border-terminal-border bg-terminal-bg px-2 py-1 font-mono text-xs text-terminal-text outline-none focus:border-terminal-accent"
+                className="input-field mt-1 font-mono text-sm"
                 value={String(value)}
                 onChange={(e) => {
                   const raw = e.target.value;
@@ -113,24 +109,24 @@ export function StrategyCard({
             </label>
           ))}
         </div>
-      )}
+      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
         <Button
           type="button"
           variant="secondary"
           disabled={!!pending || strategy.selected}
-          onClick={() => run("select")}
+          onClick={() => void run("select")}
         >
           {pending === "select" ? "…" : "Select"}
         </Button>
-        {canPaperControl && (
+        {canPaperControl ? (
           <>
             <Button
               type="button"
               variant="primary"
               disabled={!!pending || strategy.running}
-              onClick={() => run("start")}
+              onClick={() => void run("start")}
             >
               {pending === "start" ? "…" : "Start paper"}
             </Button>
@@ -138,7 +134,7 @@ export function StrategyCard({
               type="button"
               variant="warn"
               disabled={!!pending || !strategy.running}
-              onClick={() => run("stop")}
+              onClick={() => void run("stop")}
             >
               {pending === "stop" ? "…" : "Stop"}
             </Button>
@@ -146,14 +142,14 @@ export function StrategyCard({
               type="button"
               variant="ghost"
               disabled={!!pending}
-              onClick={() => run("params")}
+              onClick={() => void run("params")}
             >
               {pending === "params" ? "…" : "Save paper params"}
             </Button>
           </>
-        )}
+        ) : null}
       </div>
-      {error && <p className="mt-2 text-[11px] text-terminal-loss font-mono">{error}</p>}
-    </article>
+      {error ? <p className="mt-2 text-sm text-negative">{error}</p> : null}
+    </SectionCard>
   );
 }

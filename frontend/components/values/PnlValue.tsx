@@ -1,28 +1,43 @@
 "use client";
 
-import { MoneyValue } from "./MoneyValue";
+import { formatSignedPnl, pnlTone, type DisplayCurrency } from "@/lib/format";
 
-/** P&L with sign colouring + accessible non-colour cue. */
 export function PnlValue({
   value,
-  compact = false,
-  size = "md",
+  currency = "USD",
   className = "",
+  size = "md",
+  compact = false,
 }: {
-  value: string | number;
-  compact?: boolean;
-  size?: "sm" | "md" | "lg" | "xl";
+  value: string | number | null | undefined;
+  currency?: DisplayCurrency;
   className?: string;
+  size?: "sm" | "md" | "lg" | "xl";
+  compact?: boolean;
 }) {
-  const n = typeof value === "string" ? Number(value) : value;
-  const cue = !Number.isFinite(n) || n === 0 ? "" : n > 0 ? "+" : "";
+  void compact;
+  const display = formatSignedPnl(value, currency);
+  const tone = pnlTone(value);
+  const toneClass =
+    tone === "gain" ? "text-positive" : tone === "loss" ? "text-negative" : "text-foreground";
+  const sizeClass =
+    size === "xl"
+      ? "text-[clamp(1.875rem,5vw,2.75rem)] font-bold"
+      : size === "lg"
+        ? "text-[clamp(1.25rem,3vw,1.75rem)] font-semibold"
+        : size === "sm"
+          ? "text-sm font-medium"
+          : "text-[20px] font-semibold";
 
   return (
-    <span className={`inline-flex min-w-0 items-baseline gap-1 ${className}`}>
-      {cue ? (
-        <span className="sr-only">{n > 0 ? "profit" : "loss"}</span>
-      ) : null}
-      <MoneyValue value={value} compact={compact} signed size={size} />
+    <span
+      className={`inline-block max-w-full whitespace-nowrap tabular ${sizeClass} ${toneClass} ${className}`}
+      title={display}
+      aria-label={display}
+    >
+      {tone === "gain" ? <span className="sr-only">profit </span> : null}
+      {tone === "loss" ? <span className="sr-only">loss </span> : null}
+      {display}
     </span>
   );
 }

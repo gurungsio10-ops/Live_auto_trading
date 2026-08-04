@@ -1,4 +1,4 @@
-import type { NavItem } from "@/lib/nav";
+import type { NavKey } from "@/lib/nav";
 
 const stroke = {
   fill: "none",
@@ -8,11 +8,22 @@ const stroke = {
   strokeLinejoin: "round" as const,
 };
 
+export type LegacyNavIconName =
+  | NavKey
+  | "trading"
+  | "signals"
+  | "more"
+  | "menu"
+  | "close"
+  | "user"
+  | "chevron";
+
+/** Legacy SVG icons for residual components. Prefer Lucide via NAV_ITEMS.icon. */
 export function NavIcon({
   name,
   className = "h-5 w-5",
 }: {
-  name: NavItem["icon"] | "menu" | "close" | "user" | "chevron";
+  name: LegacyNavIconName;
   className?: string;
 }) {
   switch (name) {
@@ -25,6 +36,7 @@ export function NavIcon({
           <rect x="14" y="14" width="7" height="7" />
         </svg>
       );
+    case "markets":
     case "trading":
       return (
         <svg viewBox="0 0 24 24" className={className} aria-hidden {...stroke}>
@@ -40,6 +52,7 @@ export function NavIcon({
         </svg>
       );
     case "activity":
+    case "ai":
     case "signals":
       return (
         <svg viewBox="0 0 24 24" className={className} aria-hidden {...stroke}>
@@ -69,6 +82,9 @@ export function NavIcon({
           <path d="M8 15v-4M12 15V8M16 15v-6" />
         </svg>
       );
+    case "orders":
+    case "connection":
+    case "about":
     case "settings":
       return (
         <svg viewBox="0 0 24 24" className={className} aria-hidden {...stroke}>

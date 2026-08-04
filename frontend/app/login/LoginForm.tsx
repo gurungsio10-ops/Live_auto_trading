@@ -2,17 +2,16 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BrandMark } from "@/components/brand/BrandMark";
-import { DeveloperAttribution } from "@/components/brand/DeveloperAttribution";
-import { OwnerAvatar } from "@/components/brand/OwnerAvatar";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PaperTradingBadge } from "@/components/ui/Badge";
+import { DeveloperProfile } from "@/components/brand/DeveloperProfile";
 import { BRAND } from "@/lib/brand";
 
 export function LoginForm({ showDevCredentials }: { showDevCredentials: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/";
-
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -43,100 +42,82 @@ export function LoginForm({ showDevCredentials }: { showDevCredentials: boolean 
     }
   }
 
-  const fieldClass =
-    "mt-1 w-full min-h-11 border border-terminal-border bg-[var(--elevated)] px-3 py-3 text-base text-terminal-text outline-none focus:border-terminal-accent focus-visible:ring-2 focus-visible:ring-[var(--focus)]";
+  const field =
+    "mt-2 w-full min-h-touch rounded-control border border-border bg-surface-raised px-3 text-base text-foreground outline-none focus:border-brand";
 
   return (
-    <div className="w-full max-w-md animate-fade-up border border-terminal-border bg-terminal-panel/95 shadow-terminal">
-      <div className="border-b border-terminal-border px-5 py-6 sm:px-6">
-        <BrandMark showPaperBadge size="lg" />
-        <p className="mt-4 text-sm leading-relaxed text-terminal-dim">
-          Secure sign-in to your personal paper-trading operations console.
-        </p>
+    <div className="w-full max-w-md animate-fade-in rounded-card border border-border bg-surface shadow-soft">
+      <div className="border-b border-border px-5 py-6 sm:px-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-control bg-primary-soft text-sm font-bold text-brand">
+          A
+        </div>
+        <h1 className="mt-4 text-[28px] font-bold tracking-tight text-foreground">{BRAND.name}</h1>
+        <p className="mt-1 text-[14px] text-secondary">{BRAND.subtitle}</p>
+        <div className="mt-3">
+          <PaperTradingBadge />
+        </div>
       </div>
 
       <form onSubmit={onSubmit} className="space-y-4 px-5 py-6 sm:px-6" noValidate>
-        <label className="block">
-          <span className="text-[11px] uppercase tracking-[0.14em] text-terminal-dim">
-            Username
-          </span>
+        <label className="block text-[13px] text-secondary">
+          Username
           <input
             name="username"
             autoComplete="username"
-            inputMode="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className={fieldClass}
+            className={field}
             required
-            aria-required
           />
         </label>
-
-        <label className="block">
-          <span className="text-[11px] uppercase tracking-[0.14em] text-terminal-dim">
-            Password
-          </span>
-          <div className="relative mt-1">
+        <label className="block text-[13px] text-secondary">
+          Password
+          <div className="relative">
             <input
               name="password"
               type={showPassword ? "text" : "password"}
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className={`${fieldClass} mt-0 pr-24`}
+              className={`${field} pr-12`}
               required
-              aria-required
             />
             <button
               type="button"
-              className="absolute inset-y-0 right-0 min-h-11 min-w-11 px-3 text-[11px] uppercase tracking-wide text-terminal-dim hover:text-terminal-text"
+              className="absolute inset-y-0 right-0 mt-2 inline-flex min-h-touch min-w-touch items-center justify-center text-muted"
               onClick={() => setShowPassword((v) => !v)}
-              aria-pressed={showPassword}
+              aria-label={showPassword ? "Hide password" : "Show password"}
             >
-              {showPassword ? "Hide" : "Show"}
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
         </label>
-
-        <label className="flex min-h-11 items-center gap-3 text-[12px] text-terminal-dim">
+        <label className="flex min-h-touch items-center gap-3 text-[13px] text-secondary">
           <input
             type="checkbox"
             checked={remember}
             onChange={(e) => setRemember(e.target.checked)}
-            className="h-4 w-4 accent-terminal-accent"
+            className="h-4 w-4 accent-[var(--primary)]"
           />
           Remember me for 30 days
         </label>
-
-        {error && (
-          <p
-            className="border border-terminal-danger/50 bg-terminal-danger/10 px-3 py-2 text-[12px] font-mono text-terminal-loss"
-            role="alert"
-          >
+        {error ? (
+          <p className="rounded-control border border-negative/40 bg-negative-soft px-3 py-2 text-[13px] text-negative" role="alert">
             {error}
           </p>
-        )}
-
-        <Button type="submit" variant="primary" disabled={pending} className="w-full" size="lg">
+        ) : null}
+        <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
           {pending ? "Signing in…" : "Sign in"}
         </Button>
-
         {showDevCredentials ? (
-          <p className="text-center text-[11px] text-terminal-dim">
-            Development credentials · <span className="text-terminal-text">admin</span> /{" "}
-            <span className="text-terminal-text">atlas</span>
+          <p className="text-center text-[12px] text-muted">
+            Development credentials · admin / atlas
           </p>
         ) : null}
       </form>
 
-      <footer className="flex items-center justify-between gap-3 border-t border-terminal-border px-5 py-4 sm:px-6">
-        <div className="flex min-w-0 items-center gap-3">
-          <OwnerAvatar size="md" />
-          <div className="min-w-0">
-            <p className="truncate text-xs text-terminal-text">{BRAND.ownerName}</p>
-            <DeveloperAttribution className="mt-0.5" />
-          </div>
-        </div>
+      <footer className="border-t border-border px-5 py-4 sm:px-6">
+        <DeveloperProfile />
       </footer>
     </div>
   );

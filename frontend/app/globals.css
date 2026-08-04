@@ -3,37 +3,56 @@
 @tailwind utilities;
 
 :root {
-  /* Surfaces */
-  --bg: #070a0d;
-  --panel: #0d1218;
-  --elevated: #131b24;
-  --border: #243041;
-  --muted: #1a2432;
+  --background: #07101f;
+  --background-secondary: #0a1424;
+  --surface: #0e1a2d;
+  --surface-raised: #122139;
+  --surface-hover: #172942;
+  --border: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.24);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --primary: #5b8cff;
+  --primary-hover: #729dff;
+  --primary-soft: rgba(91, 140, 255, 0.14);
+  --positive: #22c55e;
+  --positive-soft: rgba(34, 197, 94, 0.12);
+  --negative: #ef4444;
+  --negative-soft: rgba(239, 68, 68, 0.12);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.12);
+  --focus: #5b8cff;
+  --radius-card: 18px;
+  --radius-control: 12px;
+  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.22);
+  --header-h: 60px;
+  --bottom-nav-h: 64px;
+  --sidebar-w: 248px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
 
-  /* Text */
-  --text: #e7eef7;
-  --dim: #9aabbf;
-
-  /* Semantic */
-  --accent: #3ddeb5;
-  --gain: #3ddeb5;
-  --loss: #ff6b6b;
-  --warn: #f0c14b;
-  --danger: #ff4d4f;
-  --info: #6cb6ff;
-  --live: #ff2d55;
-  --focus: #3ddeb5;
-  --grid: rgba(61, 222, 181, 0.05);
-
-  /* Shape */
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --space-1: 0.25rem;
-  --space-2: 0.5rem;
-  --space-3: 0.75rem;
-  --space-4: 1rem;
-  --space-6: 1.5rem;
-  --shadow: 0 0 0 1px var(--border), 0 12px 40px rgba(0, 0, 0, 0.45);
+  /* Compatibility aliases used by residual terminal-* utilities */
+  --bg: var(--background);
+  --panel: var(--surface);
+  --elevated: var(--surface-raised);
+  --muted: var(--surface-hover);
+  --text: var(--text-primary);
+  --dim: var(--text-secondary);
+  --accent: var(--primary);
+  --gain: var(--positive);
+  --loss: var(--negative);
+  --warn: var(--warning);
+  --danger: var(--negative);
+  --live: var(--negative);
 }
 
 * {
@@ -53,19 +72,18 @@ body {
 
 body {
   margin: 0;
-  color: var(--text);
-  background:
-    radial-gradient(1000px 520px at 8% -8%, rgba(61, 222, 181, 0.07), transparent 55%),
-    linear-gradient(180deg, #0a0f14 0%, var(--bg) 42%, #050709 100%);
+  color: var(--text-primary);
+  background: radial-gradient(900px 480px at 0% -10%, rgba(91, 140, 255, 0.08), transparent 55%),
+    linear-gradient(180deg, var(--background-secondary) 0%, var(--background) 45%, #050b14 100%);
   background-attachment: fixed;
-  font-family: var(--font-mono), ui-monospace, monospace;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
 
 ::selection {
-  background: rgba(61, 222, 181, 0.28);
-  color: #fff;
+  background: var(--primary-soft);
+  color: var(--text-primary);
 }
 
 :focus-visible {
@@ -73,19 +91,17 @@ body {
   outline-offset: 2px;
 }
 
-/* Keep inputs readable on the dark theme even when Chrome autofills them. */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
 input:-webkit-autofill:active {
-  -webkit-text-fill-color: var(--text);
-  caret-color: var(--text);
-  -webkit-box-shadow: 0 0 0 1000px var(--elevated) inset;
-  box-shadow: 0 0 0 1000px var(--elevated) inset;
+  -webkit-text-fill-color: var(--text-primary);
+  caret-color: var(--text-primary);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-raised) inset;
+  box-shadow: 0 0 0 1000px var(--surface-raised) inset;
   transition: background-color 9999s ease-in-out 0s;
 }
 
-/* Prefer ≥16px inputs on mobile to avoid iOS Safari zoom. */
 @media (max-width: 767px) {
   input,
   select,
@@ -94,56 +110,46 @@ input:-webkit-autofill:active {
   }
 }
 
-/* Dark scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@layer components {
+  .input-field {
+    @apply min-h-touch w-full rounded-control border border-border bg-surface-raised px-3 text-foreground outline-none transition duration-ui;
+  }
+  .input-field:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-soft);
+  }
+  .page-title {
+    @apply text-[clamp(1.375rem,4vw,2rem)] font-bold tracking-tight text-foreground;
+  }
+  .metric-value {
+    @apply text-[20px] font-semibold tabular text-foreground md:text-[24px];
+  }
 }
 
 @layer utilities {
   .text-gain {
-    color: var(--gain);
+    color: var(--positive);
   }
   .text-loss {
-    color: var(--loss);
+    color: var(--negative);
   }
-  .terminal-grid {
-    background-image:
-      linear-gradient(var(--grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    background-size: 24px 24px;
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
-  .scanlines {
-    background-image: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0, 0, 0, 0.06) 2px,
-      rgba(0, 0, 0, 0.06) 4px
-    );
-  }
-  .touch-target {
-    min-height: 44px;
-    min-width: 44px;
+  .safe-pb {
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 16px);
   }
 }
 
-@keyframes pulse-live {
-  0%,
-  100% {
-    opacity: 1;
-    box-shadow: 0 0 0 0 rgba(255, 45, 85, 0.45);
-  }
-  50% {
-    opacity: 0.92;
-    box-shadow: 0 0 0 8px rgba(255, 45, 85, 0);
-  }
-}
-
-@keyframes fade-up {
+@keyframes fade-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
@@ -151,17 +157,15 @@ input:-webkit-autofill:active {
   }
 }
 
-.animate-fade-up {
-  animation: fade-up 0.35s ease-out both;
-}
-
-.animate-pulse-live {
-  animation: pulse-live 1.6s ease-in-out infinite;
+.animate-fade-in {
+  animation: fade-in 180ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-up,
-  .animate-pulse-live {
+  .animate-fade-in {
     animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
   }
 }

@@ -81,7 +81,7 @@ export function MobileDrawer({
                 ].join(" ")}
                 aria-current={active ? "page" : undefined}
               >
-                <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
+                <NavIcon name={item.key} className="h-4 w-4 shrink-0" />
                 {item.label}
               </Link>
             );

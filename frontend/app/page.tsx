@@ -1,406 +1,393 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { PortfolioSummary } from "@/components/PortfolioSummary";
-import { TradingModeIndicator } from "@/components/TradingModeIndicator";
-import { KillSwitchControl } from "@/components/KillSwitchControl";
-import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
-import { DrawdownChart } from "@/components/charts/DrawdownChart";
-import { PaperModeBanner } from "@/components/brand/PaperModeBanner";
-import {
-  HealthSummary,
-  deriveHealthItems,
-} from "@/components/health/HealthSummary";
-import {
-  SchedulerStatusCard,
-  schedulerFromStatus,
-} from "@/components/health/SchedulerStatusCard";
-import { RiskReasonPanel } from "@/components/health/RiskReasonPanel";
-import { Card } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { DemoBanner } from "@/components/ui/DemoBanner";
-import { LoadingState } from "@/components/ui/LoadingState";
-import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { LoadingState } from "@/components/ui/LoadingSkeleton";
+import { SectionCard } from "@/components/ui/SectionCard";
+import { PaperTradingBadge, Badge } from "@/components/ui/Badge";
+import { PortfolioHero } from "@/components/overview/PortfolioHero";
+import { EngineStatusCard } from "@/components/overview/EngineStatusCard";
+import { SafetyControls } from "@/components/overview/SafetyControls";
+import { DecisionCard } from "@/components/cards/DecisionCard";
+import { PositionCard } from "@/components/cards/PositionCard";
+import { MoneyValue, PercentageValue, PnlValue } from "@/components/values";
 import { useAsyncData } from "@/lib/use-async-data";
 import { api } from "@/lib/api-client";
+import { engineFromPortfolio, riskFromPortfolio, systemFromHealth } from "@/lib/status";
+import { formatRelativeTime } from "@/lib/format";
+import { explainRiskReason } from "@/lib/risk-copy";
 import type {
   EquityPoint,
   HealthStatus,
-  PortfolioSummary as PortfolioSummaryType,
+  Order,
+  PortfolioSummary,
+  Position,
   RiskEvent,
   Strategy,
+  TradeSignal,
 } from "@/lib/types";
 
 export default function OverviewPage() {
-  const portfolio = useAsyncData<PortfolioSummaryType>("/api/portfolio");
+  const portfolio = useAsyncData<PortfolioSummary>("/api/portfolio");
   const equity = useAsyncData<EquityPoint[]>("/api/equity-curve");
   const health = useAsyncData<HealthStatus>("/api/health");
-  const system = useAsyncData<Record<string, unknown> | null>("/api/v1/status");
   const strategies = useAsyncData<Strategy[]>("/api/strategies");
+  const signals = useAsyncData<TradeSignal[]>("/api/signals");
+  const positions = useAsyncData<Position[]>("/api/positions");
   const riskEvents = useAsyncData<RiskEvent[]>("/api/risk-events");
+  const orders = useAsyncData<Order[]>("/api/orders");
+  const settings = useAsyncData<{ risk_limits: { max_daily_loss: string; max_drawdown: string } }>(
+    "/api/settings",
+  );
 
-  const [pausePending, setPausePending] = useState(false);
-  const [exportPending, setExportPending] = useState(false);
-  const [cyclePending, setCyclePending] = useState(false);
-  const [resetPending, setResetPending] = useState(false);
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
   const [lastCycle, setLastCycle] = useState<Record<string, unknown> | null>(null);
+  const [closing, setClosing] = useState<string | null>(null);
 
   const selectedStrategy = useMemo(() => {
     if (strategies.status !== "success") return null;
     return strategies.data.find((s) => s.selected) ?? strategies.data.find((s) => s.running) ?? null;
   }, [strategies]);
 
-  const schedulerView = useMemo(() => {
-    const base = schedulerFromStatus(
-      system.status === "success" ? system.data ?? undefined : undefined,
-    );
-    return {
-      ...base,
-      activeStrategy: base.activeStrategy ?? selectedStrategy?.name ?? null,
-      symbol: base.symbol ?? selectedStrategy?.symbols?.[0] ?? null,
-      timeframe: base.timeframe ?? selectedStrategy?.timeframe ?? null,
-      recentResult:
-        base.recentResult ??
-        (lastCycle ? String(lastCycle.signal_direction ?? "—") : null),
-    };
-  }, [system, selectedStrategy, lastCycle]);
-
-  const healthItems = useMemo(() => {
-    const h = health.status === "success" ? health.data : null;
-    const sys = system.status === "success" ? system.data : null;
-    const recon = (sys?.reconciliation as Record<string, unknown> | undefined) ?? {};
-    const sched = (sys?.scheduler as Record<string, unknown> | undefined) ?? {};
-    const db =
-      typeof sys?.database_ok === "boolean"
-        ? (sys.database_ok as boolean)
-        : typeof (sys?.database as Record<string, unknown> | undefined)?.ok === "boolean"
-          ? Boolean((sys?.database as Record<string, unknown>).ok)
-          : h?.backend_reachable
-            ? true
-            : null;
-
-    return deriveHealthItems({
-      backendOk: h?.backend_reachable ?? null,
-      databaseOk: db,
-      redisOk: typeof sys?.redis_ok === "boolean" ? (sys.redis_ok as boolean) : null,
-      marketDataOk: typeof sys?.market_data_ok === "boolean" ? (sys.market_data_ok as boolean) : null,
-      schedulerEnabled: typeof sched.enabled_by_config === "boolean" ? (sched.enabled_by_config as boolean) : null,
-      schedulerRunning: typeof sched.running === "boolean" ? (sched.running as boolean) : null,
-      schedulerError: (sched.last_error as string | null | undefined) ?? null,
-      engineOk: h?.backend_reachable ?? null,
-      reconciliationOk:
-        typeof recon.healthy === "boolean"
-          ? (recon.healthy as boolean)
-          : typeof sys?.reconciliation_healthy === "boolean"
-            ? (sys.reconciliation_healthy as boolean)
-            : null,
-    });
-  }, [health, system]);
-
+  const latestSignal =
+    signals.status === "success" && signals.data.length ? signals.data[0] : null;
   const latestRisk =
-    riskEvents.status === "success"
-      ? riskEvents.data.find((e) => e.decision !== "APPROVED") ?? riskEvents.data[0] ?? null
-      : null;
+    riskEvents.status === "success" && riskEvents.data.length ? riskEvents.data[0] : null;
 
-  async function togglePause() {
-    if (portfolio.status !== "success") return;
-    const next = !portfolio.data.trading_paused;
-    const ok = window.confirm(
-      next ? "Pause paper trading?" : "Resume paper trading?",
-    );
-    if (!ok) return;
-    setPausePending(true);
-    setActionMsg(null);
+  const system =
+    health.status === "success"
+      ? systemFromHealth({
+          backend_reachable: health.data.backend_reachable,
+          demo: health.meta?.demo,
+          backend_error: health.meta?.backend_error,
+        })
+      : systemFromHealth({});
+
+  const engine =
+    portfolio.status === "success"
+      ? engineFromPortfolio({
+          trading_paused: portfolio.data.trading_paused,
+          kill_switch_enabled: portfolio.data.kill_switch_enabled,
+          strategyRunning: selectedStrategy?.running ?? null,
+        })
+      : engineFromPortfolio({ strategyRunning: selectedStrategy?.running ?? null });
+
+  const riskState =
+    portfolio.status === "success"
+      ? riskFromPortfolio({
+          kill_switch_enabled: portfolio.data.kill_switch_enabled,
+          trading_paused: portfolio.data.trading_paused,
+          drawdown: portfolio.data.drawdown,
+          maxDrawdown:
+            settings.status === "success" ? settings.data.risk_limits.max_drawdown : undefined,
+        })
+      : "safe";
+
+  async function closePosition(symbol: string) {
+    setClosing(symbol);
     try {
-      const res = await api.post<PortfolioSummaryType>("/api/trading/pause", {
-        paused: next,
-      });
-      portfolio.setData(res.data);
-      setActionMsg(res.data.trading_paused ? "Trading paused" : "Trading resumed");
+      await api.post("/api/positions/close", { symbol });
+      await positions.reload();
+      await portfolio.reload();
+      setMsg(`Closed paper position ${symbol}`);
     } catch (err) {
-      setActionMsg(err instanceof Error ? err.message : "Pause failed");
+      setMsg(err instanceof Error ? err.message : "Close failed");
     } finally {
-      setPausePending(false);
+      setClosing(null);
     }
   }
 
-  async function exportJournal() {
-    setExportPending(true);
-    setActionMsg(null);
-    try {
-      const res = await api.get<{ filename: string; content: string; content_type: string }>(
-        "/api/journal/export",
-      );
-      const blob = new Blob([res.data.content], { type: res.data.content_type });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = res.data.filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      setActionMsg(`Exported ${res.data.filename}`);
-    } catch (err) {
-      setActionMsg(err instanceof Error ? err.message : "Export failed");
-    } finally {
-      setExportPending(false);
-    }
-  }
-
-  async function runPaperCycle() {
-    const ok = window.confirm(
-      "Run one paper cycle?\n\nThis simulates a strategy → risk → paper fill path. No live money.",
-    );
-    if (!ok) return;
-    setCyclePending(true);
-    setActionMsg(null);
-    try {
-      const res = await api.post<Record<string, unknown>>("/api/paper/cycle", {});
-      if (res.meta?.backend_error) {
-        setActionMsg(res.meta.backend_error);
-        return;
-      }
-      setLastCycle(res.data);
-      const direction = String(res.data?.signal_direction ?? "hold");
-      const order = res.data?.order_id ? ` order=${res.data.order_id}` : "";
-      setActionMsg(`Paper cycle: ${direction}${order} (simulated — not live money)`);
-      await Promise.all([portfolio.reload(), equity.reload(), riskEvents.reload(), system.reload()]);
-    } catch (err) {
-      setActionMsg(err instanceof Error ? err.message : "Paper cycle failed");
-    } finally {
-      setCyclePending(false);
-    }
-  }
-
-  async function resetPaperAccount() {
-    const ok = window.confirm(
-      "Reset the PAPER account to the starting balance?\n\nThis clears simulated positions, orders, and session state.",
-    );
-    if (!ok) return;
-    setResetPending(true);
-    setActionMsg(null);
-    try {
-      const res = await api.post<Record<string, unknown>>("/api/paper/reset", {
-        confirm: "RESET_PAPER_ACCOUNT",
-      });
-      if (res.meta?.backend_error) {
-        setActionMsg(res.meta.backend_error);
-        return;
-      }
-      setLastCycle(null);
-      setActionMsg("Paper account reset (simulated)");
-      await Promise.all([portfolio.reload(), equity.reload()]);
-    } catch (err) {
-      setActionMsg(err instanceof Error ? err.message : "Paper reset failed");
-    } finally {
-      setResetPending(false);
-    }
-  }
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="font-display text-[clamp(1.25rem,4vw,1.75rem)] tracking-[0.08em] uppercase text-terminal-text">
-            Overview
-          </h1>
-          <p className="mt-1 text-xs text-terminal-dim">
-            Paper status, health, equity, and operational controls.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-          <Button type="button" variant="secondary" disabled={cyclePending} onClick={runPaperCycle}>
-            {cyclePending ? "Running…" : "Run paper cycle"}
-          </Button>
-          <Button
-            type="button"
-            variant="warn"
-            disabled={pausePending || portfolio.status !== "success"}
-            onClick={togglePause}
-          >
-            {pausePending
-              ? "…"
-              : portfolio.status === "success" && portfolio.data.trading_paused
-                ? "Resume"
-                : "Pause"}
-          </Button>
-          <Button type="button" variant="secondary" disabled={exportPending} onClick={exportJournal}>
-            {exportPending ? "…" : "Export"}
-          </Button>
-          <Button type="button" variant="danger" disabled={resetPending} onClick={resetPaperAccount}>
-            {resetPending ? "…" : "Reset paper"}
-          </Button>
-        </div>
-      </div>
-
-      {/* 1. PAPER status */}
-      {portfolio.status === "success" ? (
-        <TradingModeIndicator mode={portfolio.data.trading_mode} />
-      ) : (
-        <PaperModeBanner />
-      )}
-
-      <DemoBanner
-        demo={portfolio.meta?.demo || equity.meta?.demo || health.meta?.demo}
-        backendError={
-          portfolio.meta?.backend_error || equity.meta?.backend_error || health.meta?.backend_error
+    <div className="space-y-4 md:space-y-5">
+      <PageHeader
+        title="Overview"
+        description="Monitor your paper portfolio, automated strategy and risk controls."
+        meta={
+          <span className="inline-flex items-center gap-2">
+            <PaperTradingBadge />
+            <span>Simulated account · no live money</span>
+          </span>
         }
       />
-      {actionMsg && (
-        <p className="text-[11px] font-mono text-terminal-accent" role="status">
-          {actionMsg}
+
+      {/* 1 Greeting + 2 Paper badge */}
+      <SectionCard>
+        <p className="text-[15px] text-secondary">{greet}</p>
+        <p className="mt-1 text-xl font-semibold text-foreground">Your paper trading desk</p>
+        <div className="mt-3">
+          <PaperTradingBadge />
+        </div>
+      </SectionCard>
+
+      <DemoBanner
+        demo={portfolio.meta?.demo || health.meta?.demo}
+        backendError={portfolio.meta?.backend_error || health.meta?.backend_error}
+      />
+      {msg ? (
+        <p className="text-[13px] text-info" role="status">
+          {msg}
         </p>
-      )}
-
-      {/* 2. System health */}
-      {health.status === "loading" && system.status === "loading" ? (
-        <LoadingState label="Loading system health…" />
-      ) : (
-        <HealthSummary items={healthItems} />
-      )}
-
-      {/* 3–5 Portfolio equity / daily PnL / exposure */}
-      {portfolio.status === "loading" && <LoadingState label="Loading portfolio…" />}
-      {portfolio.status === "error" && (
-        <ErrorState message={portfolio.error} onRetry={portfolio.reload} />
-      )}
-      {portfolio.status === "success" && (
-        <Card title="Portfolio" subtitle="Equity, cash, and P&L">
-          <PortfolioSummary data={portfolio.data} />
-        </Card>
-      )}
-
-      {/* 6–7 Strategy + Scheduler */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Strategy status" subtitle="Selected paper strategy">
-          {strategies.status === "loading" && <LoadingState label="Loading strategies…" />}
-          {strategies.status === "error" && (
-            <ErrorState message={strategies.error} onRetry={strategies.reload} />
-          )}
-          {strategies.status === "success" &&
-            (selectedStrategy ? (
-              <div className="space-y-2 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-display text-base text-terminal-text">
-                    {selectedStrategy.name}
-                  </p>
-                  <Badge tone={selectedStrategy.running ? "gain" : "neutral"}>
-                    {selectedStrategy.running ? "Running" : "Idle"}
-                  </Badge>
-                  {selectedStrategy.selected ? <Badge tone="accent">Selected</Badge> : null}
-                </div>
-                <p className="text-[11px] text-terminal-dim">{selectedStrategy.description}</p>
-                <p className="font-mono text-[11px] text-terminal-dim">
-                  {selectedStrategy.symbols.join(", ")} · {selectedStrategy.timeframe} · v
-                  {selectedStrategy.version}
-                </p>
-              </div>
-            ) : (
-              <EmptyState title="No strategy selected" description="Choose one under Strategies." />
-            ))}
-        </Card>
-        <SchedulerStatusCard data={schedulerView} />
-      </div>
-
-      {/* 8–9 Recent cycle + risk alerts */}
-      {lastCycle && (
-        <Card title="Latest paper cycle" subtitle="Simulated — not live money">
-          <dl className="grid grid-cols-2 gap-3 text-[11px] font-mono">
-            <div className="min-w-0">
-              <dt className="text-terminal-dim">Signal</dt>
-              <dd className="truncate">{String(lastCycle.signal_direction)}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-terminal-dim">Risk</dt>
-              <dd className="truncate">{String(lastCycle.risk_decision ?? "—")}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-terminal-dim">Order</dt>
-              <dd className="truncate">{String(lastCycle.order_id ?? "none")}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-terminal-dim">Status</dt>
-              <dd className="truncate">{String(lastCycle.order_status ?? "—")}</dd>
-            </div>
-          </dl>
-          {lastCycle.risk_reason_code ? (
-            <div className="mt-3">
-              <RiskReasonPanel
-                code={String(lastCycle.risk_reason_code)}
-                message={String(lastCycle.signal_reason ?? "")}
-                affectedAction="Paper cycle"
-              />
-            </div>
-          ) : null}
-          {lastCycle.indicators ? (
-            <details className="mt-3 border border-terminal-border p-3">
-              <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-terminal-dim">
-                Indicator details
-              </summary>
-              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[11px] text-terminal-dim">
-                {JSON.stringify(lastCycle.indicators, null, 2)}
-              </pre>
-            </details>
-          ) : null}
-        </Card>
-      )}
-
-      {latestRisk && latestRisk.decision !== "APPROVED" ? (
-        <RiskReasonPanel
-          code={latestRisk.reason_code}
-          message={latestRisk.message}
-          timestamp={latestRisk.timestamp}
-          affectedAction={latestRisk.symbol ? `Order on ${latestRisk.symbol}` : "Risk gate"}
-        />
       ) : null}
 
-      {/* Kill switch — secondary, confirmed */}
-      {portfolio.status === "success" && (
-        <KillSwitchControl
-          active={portfolio.data.kill_switch_enabled}
-          onChanged={(enabled) =>
-            portfolio.setData({ ...portfolio.data, kill_switch_enabled: enabled })
-          }
-        />
-      )}
-
-      {/* Charts */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card
-          title="Equity curve"
-          subtitle="Paper performance (simulated mark-to-market)"
-        >
-          {equity.status === "loading" && <LoadingState label="Loading equity curve…" />}
-          {equity.status === "error" && (
-            <ErrorState message={equity.error} onRetry={equity.reload} />
+      {/* 3 Portfolio hero + 4 Engine */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-8">
+          {portfolio.status === "loading" && <LoadingState label="Loading portfolio…" />}
+          {portfolio.status === "error" && (
+            <ErrorState
+              title="Unable to load portfolio"
+              message={portfolio.error}
+              onRetry={portfolio.reload}
+            />
           )}
-          {equity.status === "success" &&
-            (equity.data.length ? (
-              <>
-                <p className="mb-2 text-[11px] text-terminal-dim">
-                  Paper performance · not a live brokerage statement
-                </p>
-                <EquityCurveChart data={equity.data} />
-              </>
-            ) : (
-              <EmptyState title="No equity points" />
-            ))}
-        </Card>
-        <Card title="Drawdown" subtitle="Peak-to-trough depth (paper)">
-          {equity.status === "loading" && <LoadingState label="Loading drawdown…" />}
-          {equity.status === "error" && (
-            <ErrorState message={equity.error} onRetry={equity.reload} />
+          {portfolio.status === "success" && (
+            <PortfolioHero
+              data={portfolio.data}
+              equity={equity.status === "success" ? equity.data : undefined}
+              updatedAt={new Date().toISOString()}
+            />
           )}
-          {equity.status === "success" &&
-            (equity.data.length ? (
-              <DrawdownChart data={equity.data} />
-            ) : (
-              <EmptyState title="No drawdown points" />
-            ))}
-        </Card>
+        </div>
+        <div className="lg:col-span-4">
+          <EngineStatusCard
+            engine={engine}
+            system={system}
+            strategyName={selectedStrategy?.name}
+            lastCycle={
+              lastCycle
+                ? String(lastCycle.signal_direction ?? "completed")
+                : latestSignal
+                  ? formatRelativeTime(latestSignal.timestamp)
+                  : null
+            }
+          />
+        </div>
       </div>
+
+      {/* 5 Safety + 6 Today's performance */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="order-2 lg:order-1 lg:col-span-8">
+          <SectionCard title="Today’s performance" description="Paper session metrics currently available">
+            {portfolio.status === "success" ? (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                <Metric label="Daily P/L" value={<PnlValue value={portfolio.data.daily_pnl} size="md" />} />
+                <Metric label="Realised P/L" value={<PnlValue value={portfolio.data.realized_pnl} size="md" />} />
+                <Metric
+                  label="Unrealised P/L"
+                  value={<PnlValue value={portfolio.data.unrealized_pnl} size="md" />}
+                />
+                <Metric
+                  label="Open positions"
+                  value={<span className="text-[20px] font-semibold tabular text-foreground">{portfolio.data.open_position_count}</span>}
+                />
+                <Metric
+                  label="Consecutive losses"
+                  value={<span className="text-[20px] font-semibold tabular text-foreground">{portfolio.data.consecutive_losses}</span>}
+                />
+                <Metric
+                  label="Drawdown"
+                  value={<PercentageValue value={portfolio.data.drawdown} />}
+                />
+              </div>
+            ) : (
+              <EmptyState title="Performance unavailable" description="Portfolio data is required." />
+            )}
+          </SectionCard>
+        </div>
+        <div className="order-1 lg:order-2 lg:col-span-4">
+          {portfolio.status === "success" ? (
+            <SafetyControls
+              portfolio={portfolio.data}
+              onPortfolioChange={portfolio.setData}
+              onMessage={setMsg}
+              onCycleComplete={(data) => {
+                setLastCycle(data);
+                void Promise.all([portfolio.reload(), signals.reload(), riskEvents.reload(), orders.reload()]);
+              }}
+            />
+          ) : (
+            <LoadingState label="Loading controls…" />
+          )}
+        </div>
+      </div>
+
+      {/* 7 Latest decision + 9 Risk summary */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          {signals.status === "loading" && <LoadingState label="Loading decisions…" />}
+          {signals.status === "error" && (
+            <ErrorState message={signals.error} onRetry={signals.reload} />
+          )}
+          {signals.status === "success" &&
+            (latestSignal ? (
+              <DecisionCard
+                signal={latestSignal}
+                riskDecision={
+                  (lastCycle?.risk_decision as string | undefined) ??
+                  latestRisk?.decision ??
+                  null
+                }
+                riskCode={
+                  (lastCycle?.risk_reason_code as string | undefined) ??
+                  latestRisk?.reason_code ??
+                  null
+                }
+                execution={
+                  lastCycle?.order_id
+                    ? `Paper order ${String(lastCycle.order_status ?? "submitted")}`
+                    : latestRisk
+                      ? `Risk ${latestRisk.decision.toLowerCase()}`
+                      : "Not available"
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No strategy decision"
+                description="The selected strategy has not generated a decision yet."
+              />
+            ))}
+        </div>
+        <div className="lg:col-span-5">
+          <SectionCard title="Risk summary" description="Loss protection and emergency controls">
+            {portfolio.status === "success" ? (
+              <div className="space-y-3 text-[14px]">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-secondary">Overall risk</span>
+                  <Badge
+                    tone={
+                      riskState === "safe"
+                        ? "positive"
+                        : riskState === "warning"
+                          ? "warning"
+                          : "negative"
+                    }
+                  >
+                    {riskState}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-secondary">Kill switch</span>
+                  <span className="font-medium text-foreground">
+                    {portfolio.data.kill_switch_enabled ? "Active" : "Inactive"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-secondary">Daily P/L</span>
+                  <PnlValue value={portfolio.data.daily_pnl} size="sm" />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-secondary">Drawdown</span>
+                  <PercentageValue value={portfolio.data.drawdown} />
+                </div>
+                {latestRisk && latestRisk.decision !== "APPROVED" ? (
+                  <div className="rounded-control border border-warning/30 bg-warning-soft p-3 text-[13px] text-secondary">
+                    <p className="font-semibold text-foreground">
+                      {explainRiskReason(latestRisk.reason_code).title}
+                    </p>
+                    <p className="mt-1">{explainRiskReason(latestRisk.reason_code).summary}</p>
+                  </div>
+                ) : (
+                  <p className="text-[13px] text-secondary">No active risk blocks reported.</p>
+                )}
+              </div>
+            ) : (
+              <EmptyState title="Risk data unavailable" />
+            )}
+          </SectionCard>
+        </div>
+      </div>
+
+      {/* 8 Open positions + 10 Recent activity */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          <SectionCard title="Open positions" description="Up to three active paper positions">
+            {positions.status === "loading" && <LoadingState label="Loading positions…" />}
+            {positions.status === "error" && (
+              <ErrorState message={positions.error} onRetry={positions.reload} />
+            )}
+            {positions.status === "success" &&
+              (positions.data.length ? (
+                <div className="space-y-3">
+                  {positions.data.slice(0, 3).map((p) => (
+                    <PositionCard
+                      key={`${p.symbol}-${p.opened_at}`}
+                      position={p}
+                      onClose={closePosition}
+                      closing={closing === p.symbol}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No open positions"
+                  description="The paper account currently has no active market exposure."
+                />
+              ))}
+          </SectionCard>
+        </div>
+        <div className="lg:col-span-5">
+          <SectionCard title="Recent activity" description="Latest genuine paper events">
+            {orders.status === "success" || riskEvents.status === "success" || signals.status === "success" ? (
+              <ul className="space-y-3">
+                {[
+                  ...(signals.status === "success"
+                    ? signals.data.slice(0, 2).map((s) => ({
+                        id: `s-${s.id}`,
+                        text: `Strategy signal generated for ${s.symbol}`,
+                        time: s.timestamp,
+                        tag: "Signal",
+                      }))
+                    : []),
+                  ...(orders.status === "success"
+                    ? orders.data.slice(0, 2).map((o) => ({
+                        id: `o-${o.id}`,
+                        text: `Paper order ${o.status.toLowerCase()} · ${o.symbol}`,
+                        time: o.created_at,
+                        tag: "Order",
+                      }))
+                    : []),
+                  ...(riskEvents.status === "success"
+                    ? riskEvents.data.slice(0, 2).map((r) => ({
+                        id: `r-${r.id}`,
+                        text: `Risk rule ${r.decision.toLowerCase()} · ${r.reason_code}`,
+                        time: r.timestamp,
+                        tag: "Risk",
+                      }))
+                    : []),
+                ]
+                  .sort((a, b) => +new Date(b.time) - +new Date(a.time))
+                  .slice(0, 5)
+                  .map((e) => (
+                    <li key={e.id} className="rounded-control border border-border px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge tone="neutral">{e.tag}</Badge>
+                        <span className="text-[12px] text-muted">{formatRelativeTime(e.time)}</span>
+                      </div>
+                      <p className="mt-1 text-[13px] text-foreground">{e.text}</p>
+                    </li>
+                  ))}
+              </ul>
+            ) : (
+              <LoadingState label="Loading activity…" />
+            )}
+          </SectionCard>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-control border border-border bg-surface-raised/40 px-3 py-3">
+      <p className="text-[12px] text-muted">{label}</p>
+      <div className="mt-1 min-w-0">{value}</div>
     </div>
   );
 }

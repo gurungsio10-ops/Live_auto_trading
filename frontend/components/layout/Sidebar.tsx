@@ -55,7 +55,7 @@ export function Sidebar({
               ].join(" ")}
               aria-current={active ? "page" : undefined}
             >
-              <NavIcon name={link.icon} className="h-4 w-4 shrink-0" />
+              <NavIcon name={link.key} className="h-4 w-4 shrink-0" />
               {!collapsed ? <span className="truncate">{link.label}</span> : null}
             </Link>
           );

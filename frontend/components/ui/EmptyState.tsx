@@ -1,16 +1,18 @@
 export function EmptyState({
-  title = "No data",
-  description = "Nothing to display for the current filters.",
+  title,
+  description,
 }: {
-  title?: string;
+  title: string;
   description?: string;
 }) {
   return (
-    <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 border border-dashed border-terminal-border bg-terminal-panel/40 px-6 text-center">
-      <p className="font-display text-sm uppercase tracking-[0.12em] text-terminal-text">
-        {title}
-      </p>
-      <p className="max-w-md text-xs text-terminal-dim">{description}</p>
+    <div className="rounded-card border border-dashed border-border bg-surface-raised/40 px-4 py-8 text-center">
+      <p className="text-[15px] font-semibold text-foreground">{title}</p>
+      {description ? (
+        <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-secondary">
+          {description}
+        </p>
+      ) : null}
     </div>
   );
 }

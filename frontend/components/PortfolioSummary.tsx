@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { PortfolioSummary as PortfolioSummaryType } from "@/lib/types";
 import { MoneyValue, PercentageValue, PnlValue } from "@/components/values";
 
@@ -9,7 +10,7 @@ function Metric({
   emphasize = false,
 }: {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
   emphasize?: boolean;
 }) {
   return (

@@ -1,24 +1,22 @@
 import { ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost" | "warn";
+type Variant = "primary" | "secondary" | "danger" | "dangerOutline" | "warn" | "ghost";
 type Size = "sm" | "md" | "lg";
 
 const variants: Record<Variant, string> = {
-  primary:
-    "bg-terminal-accent text-black hover:brightness-110 active:brightness-95 border border-terminal-accent",
+  primary: "bg-primary text-white hover:bg-primary-hover border border-transparent",
   secondary:
-    "bg-terminal-elevated text-terminal-text border border-terminal-border hover:border-terminal-dim active:bg-terminal-muted",
-  danger:
-    "bg-terminal-danger/15 text-terminal-danger border border-terminal-danger/50 hover:bg-terminal-danger/25 active:bg-terminal-danger/30",
-  warn: "bg-terminal-warn/15 text-terminal-warn border border-terminal-warn/40 hover:bg-terminal-warn/25 active:bg-terminal-warn/30",
-  ghost:
-    "bg-transparent text-terminal-dim border border-transparent hover:text-terminal-text hover:border-terminal-border active:bg-terminal-muted/40",
+    "bg-surface-raised text-foreground border border-border hover:border-border-strong hover:bg-surface-hover",
+  warn: "bg-transparent text-warning border border-warning/40 hover:bg-warning-soft",
+  danger: "bg-negative-soft text-negative border border-negative/40 hover:bg-negative/20",
+  dangerOutline: "bg-transparent text-negative border border-negative/45 hover:bg-negative-soft",
+  ghost: "bg-transparent text-secondary border border-transparent hover:text-foreground hover:bg-surface-hover",
 };
 
 const sizes: Record<Size, string> = {
-  sm: "min-h-9 px-3 py-1.5 text-[11px]",
-  md: "min-h-11 px-3.5 py-2 text-xs",
-  lg: "min-h-12 px-4 py-2.5 text-sm",
+  sm: "min-h-11 px-3 text-xs",
+  md: "min-h-touch px-4 text-sm",
+  lg: "min-h-touch-lg px-5 text-sm md:text-[15px]",
 };
 
 export function Button({
@@ -26,16 +24,13 @@ export function Button({
   size = "md",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: Variant;
-  size?: Size;
-}) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
   return (
     <button
       className={[
-        "inline-flex items-center justify-center gap-2 rounded-sm font-medium uppercase tracking-wide transition",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",
-        "disabled:cursor-not-allowed disabled:opacity-40 font-mono",
+        "inline-flex items-center justify-center gap-2 rounded-control font-medium transition duration-ui",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]",
+        "disabled:cursor-not-allowed disabled:opacity-45",
         variants[variant],
         sizes[size],
         className,

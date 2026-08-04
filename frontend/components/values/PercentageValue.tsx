@@ -8,23 +8,18 @@ export function PercentageValue({
   className = "",
   size = "md",
 }: {
-  value: string | number;
+  value: string | number | null | undefined;
   signed?: boolean;
   className?: string;
   size?: "sm" | "md" | "lg";
 }) {
-  const display = formatPct(value);
+  void size;
+  const display = formatPct(value, 2, signed);
   const tone = signed ? pnlTone(value) : "flat";
   const toneClass =
-    tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-terminal-text";
-  const sizeClass = size === "sm" ? "text-xs" : size === "lg" ? "text-base" : "text-sm";
-
+    tone === "gain" ? "text-positive" : tone === "loss" ? "text-negative" : "text-foreground";
   return (
-    <span
-      className={`inline-block whitespace-nowrap font-mono tabular-nums ${sizeClass} ${toneClass} ${className}`}
-      title={display}
-      aria-label={display}
-    >
+    <span className={`tabular ${toneClass} ${className}`} title={display} aria-label={display}>
       {display}
     </span>
   );

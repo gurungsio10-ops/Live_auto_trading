@@ -28,7 +28,7 @@ export function BottomNav({ onMore }: { onMore: () => void }) {
                 ].join(" ")}
                 aria-current={active ? "page" : undefined}
               >
-                <NavIcon name={item.icon} className="h-5 w-5" />
+                <NavIcon name={item.key} className="h-5 w-5" />
                 <span className="truncate">{item.shortLabel ?? item.label}</span>
               </Link>
             </li>

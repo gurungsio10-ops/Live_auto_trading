@@ -1,24 +1,22 @@
 "use client";
 
-import { formatTs, formatTsShort } from "@/lib/format";
+import { formatRelativeTime, formatTs } from "@/lib/format";
 
 export function TimestampValue({
   value,
-  compact = false,
+  relative = false,
   className = "",
+  compact = false,
 }: {
   value: string;
-  compact?: boolean;
+  relative?: boolean;
   className?: string;
+  compact?: boolean;
 }) {
   const full = formatTs(value);
-  const display = compact ? formatTsShort(value) : full;
+  const display = relative ? formatRelativeTime(value) : compact ? full.slice(5, 16) : full;
   return (
-    <time
-      dateTime={value}
-      title={full}
-      className={`inline-block whitespace-nowrap font-mono text-xs text-terminal-dim tabular-nums ${className}`}
-    >
+    <time dateTime={value} title={full} className={`text-[13px] text-muted tabular ${className}`}>
       {display}
     </time>
   );
