@@ -22,21 +22,16 @@ from app.services.paper_session import get_paper_session, reset_paper_session
 
 router = APIRouter(tags=["mvp-api"])
 
-# Process-local trading_enabled override (start/stop). Seeded from settings.
-_TRADING_ENABLED: bool | None = None
 _SYSTEM_EVENTS: list[dict[str, Any]] = []
 
 
 def _trading_enabled() -> bool:
-    global _TRADING_ENABLED
-    if _TRADING_ENABLED is None:
-        _TRADING_ENABLED = bool(get_settings().trading_enabled)
-    return _TRADING_ENABLED
+    """Compatibility shim — authoritative flag lives on PaperSession."""
+    return bool(get_paper_session().trading_enabled)
 
 
 def set_trading_enabled(enabled: bool) -> bool:
-    global _TRADING_ENABLED
-    _TRADING_ENABLED = enabled
+    get_paper_session().set_trading_enabled(enabled)
     _emit("TRADING_ENABLED", {"enabled": enabled})
     return enabled
 
@@ -72,6 +67,55 @@ class KillSwitchBody(BaseModel):
     confirm: str | None = None
 
 
+async def _run_shared_cycle(
+    *,
+    symbol: str,
+    timeframe: str,
+    strategy_id: str,
+    correlation_id: str | None,
+    settings: Any,
+) -> paper_cycle.CycleResult:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.db.base import create_engine
+    from app.execution.gateway import OrderGateway
+    from app.journal.store import JournalStore
+
+    session = get_paper_session()
+    engine = create_engine()
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as db:
+            journal = JournalStore(db)
+            key = paper_cycle._session_key(symbol, strategy_id)
+            orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
+            if orch is None:
+                orch = paper_cycle.get_or_create_orchestrator(
+                    symbol=symbol,
+                    strategy_id=strategy_id,
+                    settings=settings,
+                    paper_engine=session.paper,
+                    journal=journal,
+                )
+            orch.paper = session.paper
+            orch.risk = session.risk_engine
+            orch.gateway = OrderGateway(session.paper, session.risk_engine)
+            orch.journal = journal
+            orch.kill_switch_enabled = session.kill_switch_enabled
+            orch.settings = settings
+            return await paper_cycle.run_paper_trading_cycle(
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_id=strategy_id,
+                correlation_id=correlation_id,
+                settings=settings,
+                orchestrator=orch,
+                journal=journal,
+            )
+    finally:
+        await engine.dispose()
+
+
 @router.get("/health")
 async def health() -> dict[str, Any]:
     settings = get_settings()
@@ -89,12 +133,17 @@ async def health() -> dict[str, Any]:
 
 @router.get("/readiness")
 async def readiness() -> dict[str, Any]:
+    from app.services.reconciliation import is_reconciliation_healthy
+
     settings = get_settings()
     if settings.trading_mode != "paper":
         raise HTTPException(
             status_code=503, detail="Not ready: trading_mode is not paper"
         )
-    # Reuse main DB probe pattern via paper session existence.
+    if settings.enable_reconciliation and not is_reconciliation_healthy():
+        raise HTTPException(
+            status_code=503, detail="Not ready: reconciliation unhealthy"
+        )
     return {
         "status": "ready",
         "trading_mode": settings.trading_mode,
@@ -217,6 +266,82 @@ async def system_events(limit: int = Query(default=50, ge=1, le=200)) -> dict[st
     }
 
 
+@router.get("/scheduler/status")
+async def scheduler_status_endpoint() -> dict[str, Any]:
+    from app.services.trading_scheduler import scheduler_status
+
+    return {"scheduler": scheduler_status(), "banner": "PAPER TRADING — NO REAL FUNDS"}
+
+
+@router.post("/scheduler/start")
+async def scheduler_start(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
+    if body.confirm != "START_SCHEDULER":
+        raise HTTPException(status_code=400, detail="confirm must equal START_SCHEDULER")
+    get_safety_guard().assert_paper_only()
+    from app.services.trading_scheduler import scheduler_status, start_scheduler
+
+    set_trading_enabled(True)
+    get_settings().enable_trading_scheduler = True
+    start_scheduler(force=True)
+    return {"scheduler": scheduler_status(), "trading_enabled": True}
+
+
+@router.post("/scheduler/pause")
+async def scheduler_pause(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
+    if body.confirm != "PAUSE_SCHEDULER":
+        raise HTTPException(status_code=400, detail="confirm must equal PAUSE_SCHEDULER")
+    from app.services.trading_scheduler import pause_scheduler
+
+    status = await pause_scheduler()
+    return {"scheduler": status}
+
+
+@router.post("/scheduler/resume")
+async def scheduler_resume(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
+    if body.confirm != "RESUME_SCHEDULER":
+        raise HTTPException(
+            status_code=400, detail="confirm must equal RESUME_SCHEDULER"
+        )
+    from app.services.trading_scheduler import resume_scheduler
+
+    status = await resume_scheduler()
+    return {"scheduler": status}
+
+
+@router.get("/scheduler/runs")
+async def scheduler_runs(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.db.base import create_engine
+    from app.services.cycle_lock import recent_scheduler_runs
+
+    engine = create_engine()
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as db:
+            items = await recent_scheduler_runs(db, limit=limit)
+        return {"items": items, "total": len(items)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"scheduler runs unavailable: {exc}")
+    finally:
+        await engine.dispose()
+
+
+@router.post("/reconciliation/run")
+async def reconciliation_run(_: AdminAuthDep) -> dict[str, Any]:
+    from app.services.reconciliation import run_paper_reconciliation
+
+    result = await run_paper_reconciliation(persist=True)
+    return result.to_dict()
+
+
+@router.get("/reconciliation/status")
+async def reconciliation_status_endpoint() -> dict[str, Any]:
+    from app.services.reconciliation import reconciliation_status
+
+    return reconciliation_status()
+
+
 @router.post("/trading/cycle")
 async def trading_cycle(body: CycleBody, _: AdminAuthDep) -> dict[str, Any]:
     settings = get_settings()
@@ -238,31 +363,12 @@ async def trading_cycle(body: CycleBody, _: AdminAuthDep) -> dict[str, Any]:
     symbol = body.symbol or settings.default_symbol
     timeframe = body.timeframe or settings.default_timeframe
 
-    # Share dashboard paper/risk engines so UI and cycle see one portfolio.
-    from app.execution.gateway import OrderGateway
-
-    key = paper_cycle._session_key(symbol, body.strategy_id)
-    orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
-    if orch is None:
-        orch = paper_cycle.get_or_create_orchestrator(
-            symbol=symbol,
-            strategy_id=body.strategy_id,
-            settings=settings,
-            paper_engine=session.paper,
-        )
-    orch.paper = session.paper
-    orch.risk = session.risk_engine
-    orch.gateway = OrderGateway(session.paper, session.risk_engine)
-    orch.kill_switch_enabled = session.kill_switch_enabled
-    orch.settings = settings
-
-    result = await paper_cycle.run_paper_trading_cycle(
+    result = await _run_shared_cycle(
         symbol=symbol,
         timeframe=timeframe,
         strategy_id=body.strategy_id,
         correlation_id=body.correlation_id,
         settings=settings,
-        orchestrator=orch,
     )
     signal = paper_cycle.last_signal()
     if signal is not None:
@@ -301,6 +407,7 @@ async def trading_cycle(body: CycleBody, _: AdminAuthDep) -> dict[str, Any]:
         "portfolio": result.portfolio,
         "indicators": result.indicators,
         "idempotent_replay": result.idempotent_replay,
+        "lock_status": result.lock_status,
         "message": result.message,
         "simulated": True,
         "banner": "PAPER TRADING — NO REAL FUNDS",
@@ -322,9 +429,8 @@ async def trading_start(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
     set_trading_enabled(True)
     from app.services.trading_scheduler import scheduler_status, start_scheduler
 
-    # Enable continuous cycles when operator starts paper trading.
     get_settings().enable_trading_scheduler = True
-    start_scheduler()
+    start_scheduler(force=True)
     return {
         "trading_enabled": True,
         "mode": "paper",
@@ -340,14 +446,15 @@ async def trading_stop(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
             status_code=400, detail="confirm must equal STOP_PAPER_TRADING"
         )
     set_trading_enabled(False)
+    from app.services.trading_scheduler import stop_scheduler
+
+    await stop_scheduler()
+    get_settings().enable_trading_scheduler = False
     return {"trading_enabled": False, "mode": "paper"}
 
 
 @router.post("/trading/kill-switch")
 async def trading_kill_switch(body: KillSwitchBody, _: AdminAuthDep) -> dict[str, Any]:
-    if body.enabled and body.confirm not in (None, "ACTIVATE_KILL_SWITCH"):
-        # Allow without confirm for emergency, but prefer confirm when provided wrong.
-        pass
     result = get_paper_session().set_kill_switch(body.enabled)
     if body.enabled:
         set_trading_enabled(False)

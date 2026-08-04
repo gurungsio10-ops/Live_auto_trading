@@ -172,12 +172,21 @@ async def ready() -> dict[str, Any]:
             "runtime_mode": s.runtime_mode.value,
             "database_ok": False,
         }
+    recon_ok = is_reconciliation_healthy()
+    if s.enable_reconciliation and not recon_ok:
+        return {
+            "status": "not_ready",
+            "reason": "reconciliation unhealthy",
+            "runtime_mode": s.runtime_mode.value,
+            "database_ok": True,
+            "reconciliation_healthy": False,
+        }
     return {
         "status": "ready",
         "trading_mode": s.trading_mode,
         "runtime_mode": s.runtime_mode.value,
         "database_ok": True,
-        "reconciliation_healthy": is_reconciliation_healthy(),
+        "reconciliation_healthy": recon_ok,
     }
 
 
@@ -199,6 +208,18 @@ async def metrics() -> dict[str, Any]:
         "scheduler": scheduler_status(),
         "reconciliation": reconciliation_status(),
         "last_cycle_signal": cycle.signal_direction if cycle else None,
+        "last_cycle": (
+            {
+                "correlation_id": cycle.correlation_id,
+                "signal_direction": cycle.signal_direction,
+                "order_id": cycle.order_id,
+                "risk_decision": cycle.risk_decision,
+                "idempotent_replay": cycle.idempotent_replay,
+                "reject_reason": cycle.reject_reason,
+            }
+            if cycle
+            else None
+        ),
         "live_orders_allowed": False,
     }
 

@@ -282,37 +282,55 @@ async def journal(pagination: PaginationDep) -> dict[str, Any]:
         "portfolio/journal views. Paper mode only."
     ),
 )
-async def run_cycle(body: PaperCycleBody) -> dict[str, Any]:
+async def run_cycle(body: PaperCycleBody, _: AdminAuthDep) -> dict[str, Any]:
     settings = get_settings()
     if settings.trading_mode != "paper":
         raise LiveTradingDisabledError("Paper cycle requires TRADING_MODE=paper")
     session = get_paper_session()
-    # Share the dashboard paper/risk engines so UI and cycle see one portfolio.
-    from app.execution.gateway import OrderGateway
-
-    key = paper_cycle._session_key(body.symbol, body.strategy_id)
-    orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
-    if orch is None:
-        orch = paper_cycle.get_or_create_orchestrator(
-            symbol=body.symbol,
-            strategy_id=body.strategy_id,
-            settings=settings,
-            paper_engine=session.paper,
+    if session.kill_switch_enabled or settings.kill_switch_enabled:
+        raise HTTPException(
+            status_code=423, detail="Kill switch active — trading blocked"
         )
-    orch.paper = session.paper
-    orch.risk = session.risk_engine
-    orch.gateway = OrderGateway(session.paper, session.risk_engine)
-    orch.kill_switch_enabled = session.kill_switch_enabled
-    orch.settings = settings
+    # Share the dashboard paper/risk engines so UI and cycle see one portfolio.
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    result = await paper_cycle.run_paper_trading_cycle(
-        symbol=body.symbol,
-        timeframe=body.timeframe,
-        correlation_id=body.correlation_id,
-        strategy_id=body.strategy_id,
-        settings=settings,
-        orchestrator=orch,
-    )
+    from app.db.base import create_engine
+    from app.execution.gateway import OrderGateway
+    from app.journal.store import JournalStore
+
+    engine = create_engine()
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as db:
+            journal = JournalStore(db)
+            key = paper_cycle._session_key(body.symbol, body.strategy_id)
+            orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
+            if orch is None:
+                orch = paper_cycle.get_or_create_orchestrator(
+                    symbol=body.symbol,
+                    strategy_id=body.strategy_id,
+                    settings=settings,
+                    paper_engine=session.paper,
+                    journal=journal,
+                )
+            orch.paper = session.paper
+            orch.risk = session.risk_engine
+            orch.gateway = OrderGateway(session.paper, session.risk_engine)
+            orch.journal = journal
+            orch.kill_switch_enabled = session.kill_switch_enabled
+            orch.settings = settings
+
+            result = await paper_cycle.run_paper_trading_cycle(
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                correlation_id=body.correlation_id,
+                strategy_id=body.strategy_id,
+                settings=settings,
+                orchestrator=orch,
+                journal=journal,
+            )
+    finally:
+        await engine.dispose()
 
     # Mirror cycle artefacts into the dashboard session views.
     signal = paper_cycle.last_signal()

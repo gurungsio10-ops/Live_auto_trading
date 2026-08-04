@@ -14,15 +14,21 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useAsyncData } from "@/lib/use-async-data";
 import { api } from "@/lib/api-client";
-import type { EquityPoint, PortfolioSummary as PortfolioSummaryType } from "@/lib/types";
+import type {
+  EquityPoint,
+  PortfolioSummary as PortfolioSummaryType,
+  SystemStatusPayload,
+} from "@/lib/types";
 
 export default function OverviewPage() {
   const portfolio = useAsyncData<PortfolioSummaryType>("/api/portfolio");
   const equity = useAsyncData<EquityPoint[]>("/api/equity-curve");
+  const system = useAsyncData<SystemStatusPayload>("/api/system/status");
   const [pausePending, setPausePending] = useState(false);
   const [exportPending, setExportPending] = useState(false);
   const [cyclePending, setCyclePending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
+  const [reconPending, setReconPending] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [lastCycle, setLastCycle] = useState<Record<string, unknown> | null>(null);
 
@@ -83,6 +89,29 @@ export default function OverviewPage() {
       setActionMsg(err instanceof Error ? err.message : "Paper cycle failed");
     } finally {
       setCyclePending(false);
+    }
+  }
+
+  async function runReconciliation() {
+    setReconPending(true);
+    setActionMsg(null);
+    try {
+      const res = await api.post<Record<string, unknown>>("/api/reconciliation/run", {});
+      if (res.meta?.backend_error) {
+        setActionMsg(res.meta.backend_error);
+        return;
+      }
+      const healthy = Boolean(res.data?.healthy);
+      setActionMsg(
+        healthy
+          ? "Reconciliation OK"
+          : `Reconciliation HALT: ${String(res.data?.detail ?? "mismatch")}`,
+      );
+      await system.reload();
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : "Reconciliation failed");
+    } finally {
+      setReconPending(false);
     }
   }
 
@@ -153,6 +182,14 @@ export default function OverviewPage() {
           </Button>
           <Button
             type="button"
+            variant="secondary"
+            disabled={reconPending}
+            onClick={runReconciliation}
+          >
+            {reconPending ? "Reconciling…" : "Run reconciliation"}
+          </Button>
+          <Button
+            type="button"
             variant="danger"
             disabled={resetPending}
             onClick={resetPaperAccount}
@@ -161,6 +198,53 @@ export default function OverviewPage() {
           </Button>
         </div>
       </div>
+
+      <Card title="System status" subtitle="Backend connectivity, scheduler, reconciliation (UTC)">
+        {system.status === "loading" && <LoadingState label="Loading system status…" />}
+        {system.status === "error" && (
+          <ErrorState message={system.error} onRetry={system.reload} />
+        )}
+        {system.status === "success" && (
+          <dl className="grid gap-2 text-[11px] font-mono sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <dt className="text-terminal-dim">Ready</dt>
+              <dd>{String(system.data.ready?.status ?? "—")}</dd>
+            </div>
+            <div>
+              <dt className="text-terminal-dim">Trading mode</dt>
+              <dd>{String(system.data.health?.trading_mode ?? "—")}</dd>
+            </div>
+            <div>
+              <dt className="text-terminal-dim">Kill switch</dt>
+              <dd>{String(system.data.health?.kill_switch_enabled ?? "—")}</dd>
+            </div>
+            <div>
+              <dt className="text-terminal-dim">Scheduler</dt>
+              <dd>
+                {JSON.stringify(
+                  (system.data.health?.scheduler as Record<string, unknown>) ?? {},
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-terminal-dim">Reconciliation</dt>
+              <dd>
+                {JSON.stringify(
+                  (system.data.health?.reconciliation as Record<string, unknown>) ?? {},
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-terminal-dim">Last cycle</dt>
+              <dd>
+                {JSON.stringify(
+                  (system.data.metrics?.last_cycle as Record<string, unknown>) ?? {},
+                )}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </Card>
 
       <DemoBanner
         demo={portfolio.meta?.demo || equity.meta?.demo}

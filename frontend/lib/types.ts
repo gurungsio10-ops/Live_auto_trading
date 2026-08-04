@@ -87,8 +87,16 @@ export interface PortfolioSummary {
   trading_mode: TradingMode;
   runtime_mode?: RuntimeMode | string;
   kill_switch_enabled: boolean;
+  trading_enabled?: boolean;
   trading_paused: boolean;
   exchange_env: ExchangeEnv;
+}
+
+export interface SystemStatusPayload {
+  health: Record<string, unknown>;
+  ready: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  banner: string;
 }
 
 export interface EquityPoint {

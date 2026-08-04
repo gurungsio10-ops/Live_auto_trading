@@ -31,6 +31,9 @@ KEY_KILL_SWITCH = "kill_switch"
 KEY_PAPER_CHECKPOINT = "paper_checkpoint"
 KEY_CYCLE_KEYS = "processed_cycle_keys"
 KEY_RUNTIME = "runtime_mode"
+KEY_TRADING_ENABLED = "trading_enabled"
+KEY_TRADING_PAUSED = "trading_paused"
+KEY_RECON_HALT = "reconciliation_halt"
 
 
 def _dec(value: object) -> Decimal:
@@ -68,6 +71,54 @@ async def load_kill_switch(session: AsyncSession) -> bool | None:
     if value is None:
         return None
     return bool(value.get("enabled"))
+
+
+async def save_trading_enabled(session: AsyncSession, *, enabled: bool) -> None:
+    await set_system_value(
+        session,
+        KEY_TRADING_ENABLED,
+        {"enabled": enabled, "updated_at": utc_now().isoformat()},
+    )
+
+
+async def load_trading_enabled(session: AsyncSession) -> bool | None:
+    value = await get_system_value(session, KEY_TRADING_ENABLED)
+    if value is None:
+        return None
+    return bool(value.get("enabled"))
+
+
+async def save_trading_paused(session: AsyncSession, *, paused: bool) -> None:
+    await set_system_value(
+        session,
+        KEY_TRADING_PAUSED,
+        {"paused": paused, "updated_at": utc_now().isoformat()},
+    )
+
+
+async def load_trading_paused(session: AsyncSession) -> bool | None:
+    value = await get_system_value(session, KEY_TRADING_PAUSED)
+    if value is None:
+        return None
+    return bool(value.get("paused"))
+
+
+async def save_reconciliation_halt(
+    session: AsyncSession, *, halted: bool, detail: str = ""
+) -> None:
+    await set_system_value(
+        session,
+        KEY_RECON_HALT,
+        {
+            "halted": halted,
+            "detail": detail,
+            "updated_at": utc_now().isoformat(),
+        },
+    )
+
+
+async def load_reconciliation_halt(session: AsyncSession) -> dict[str, Any] | None:
+    return await get_system_value(session, KEY_RECON_HALT)
 
 
 async def save_cycle_keys(

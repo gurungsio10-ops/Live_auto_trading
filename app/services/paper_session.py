@@ -117,6 +117,7 @@ class PaperSession:
         self.gateway = OrderGateway(self.paper, self.risk_engine)
 
         self.kill_switch_enabled: bool = self.settings.kill_switch_enabled
+        self.trading_enabled: bool = bool(self.settings.trading_enabled)
         self.trading_paused: bool = False
         self.selected_strategy_id: str | None = "ema_crossover"
         self.running_strategies: set[str] = set()
@@ -505,6 +506,7 @@ class PaperSession:
                 "trading_mode": self.settings.trading_mode,
                 "runtime_mode": self.settings.runtime_mode.value,
                 "kill_switch_enabled": self.kill_switch_enabled,
+                "trading_enabled": self.trading_enabled,
                 "trading_paused": self.trading_paused,
                 "exchange_env": self.settings.exchange_env,
             }
@@ -677,9 +679,80 @@ class PaperSession:
                 pass
             return {"kill_switch_enabled": enabled}
 
+    def set_trading_enabled(self, enabled: bool) -> dict[str, Any]:
+        """Authoritative paper trading enable/disable (persisted to DB)."""
+        with self._lock:
+            self.trading_enabled = enabled
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_trading_enabled(session, enabled=enabled)
+                            await store.append_audit_event(
+                                session,
+                                event_type="TRADING_ENABLED",
+                                message=(
+                                    "Paper trading enabled"
+                                    if enabled
+                                    else "Paper trading disabled"
+                                ),
+                                payload={"enabled": enabled},
+                            )
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
+            return {
+                "trading_enabled": enabled,
+                "kill_switch_enabled": self.kill_switch_enabled,
+            }
+
     def set_paused(self, paused: bool) -> dict[str, Any]:
         with self._lock:
             self.trading_paused = paused
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_trading_paused(session, paused=paused)
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
             return self.portfolio_summary()
 
     # ------------------------------------------------------------------ strategy
@@ -966,6 +1039,15 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
     kill = await store.load_kill_switch(session)
     if kill is not None:
         paper.kill_switch_enabled = kill
+    trading_enabled = await store.load_trading_enabled(session)
+    if trading_enabled is not None:
+        paper.trading_enabled = trading_enabled
+    trading_paused = await store.load_trading_paused(session)
+    if trading_paused is not None:
+        paper.trading_paused = trading_paused
+    halt = await store.load_reconciliation_halt(session)
+    if halt is not None:
+        paper.risk_engine.state.reconciliation_healthy = not bool(halt.get("halted"))
 
     checkpoint = await store.load_paper_checkpoint(session)
     if checkpoint:
@@ -1014,6 +1096,8 @@ async def persist_paper_session(
 
     paper = get_paper_session()
     await store.save_kill_switch(session, enabled=paper.kill_switch_enabled)
+    await store.save_trading_enabled(session, enabled=paper.trading_enabled)
+    await store.save_trading_paused(session, paused=paper.trading_paused)
     fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
     await store.save_paper_checkpoint(
         session,
@@ -1048,6 +1132,13 @@ async def bootstrap_paper_runtime() -> None:
             await hydrate_paper_session_from_db(session)
             keys = await paper_cycle.load_persisted_cycle_keys(session)
             paper_cycle.set_processed_cycle_keys(keys)
+        # Startup reconciliation — fail-closed via risk engine flag.
+        try:
+            from app.services.reconciliation import run_paper_reconciliation
+
+            await run_paper_reconciliation(persist=True)
+        except Exception:
+            pass
     except Exception:
         # Paper trading can still run in-memory if DB is unavailable.
         from app.core.logging import get_logger

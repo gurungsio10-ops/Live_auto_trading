@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -15,9 +15,19 @@ logger = get_logger("reconciliation")
 
 _STATE: dict[str, Any] = {
     "healthy": True,
+    "halted": False,
     "last_run_at": None,
     "last_result": None,
 }
+
+
+@dataclass(frozen=True)
+class Mismatch:
+    field: str
+    expected: str
+    observed: str
+    difference: str
+    severity: str  # critical | high | medium | low
 
 
 @dataclass(frozen=True)
@@ -28,6 +38,9 @@ class ReconciliationResult:
     detail: str
     cash: str
     position_count: int
+    mismatches: list[Mismatch] = field(default_factory=list)
+    equity: str = "0"
+    reconstructed_cash: str = "0"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -36,28 +49,51 @@ class ReconciliationResult:
             "positions_ok": self.positions_ok,
             "detail": self.detail,
             "cash": self.cash,
+            "equity": self.equity,
+            "reconstructed_cash": self.reconstructed_cash,
             "position_count": self.position_count,
+            "mismatches": [
+                {
+                    "field": m.field,
+                    "expected": m.expected,
+                    "observed": m.observed,
+                    "difference": m.difference,
+                    "severity": m.severity,
+                }
+                for m in self.mismatches
+            ],
             "checked_at": utc_now().isoformat(),
+            "halted": bool(_STATE["halted"]),
         }
 
 
 def reconciliation_status() -> dict[str, Any]:
     return {
         "healthy": bool(_STATE["healthy"]),
+        "halted": bool(_STATE["halted"]),
         "last_run_at": _STATE["last_run_at"],
         "last_result": _STATE["last_result"],
     }
 
 
 def is_reconciliation_healthy() -> bool:
-    return bool(_STATE["healthy"])
+    return bool(_STATE["healthy"]) and not bool(_STATE["halted"])
 
 
-async def run_paper_reconciliation() -> ReconciliationResult:
+def clear_reconciliation_halt() -> None:
+    """Operator-cleared halt after corrective action (does not rewrite balances)."""
+    _STATE["halted"] = False
+    _STATE["healthy"] = True
+    session = get_paper_session()
+    session.risk_engine.state.reconciliation_healthy = True
+
+
+async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationResult:
     """
-    Recompute expected cash/equity invariants from in-memory paper engine.
+    Recompute expected cash/equity invariants from the paper engine ledger.
 
-    Severe negative cash or inconsistent position quantities fail closed.
+    Severe negative cash, invalid positions, or fill-ledger drift fail closed
+    and activate a reconciliation halt (no silent overwrite).
     """
     settings = get_settings()
     if not settings.enable_reconciliation:
@@ -65,6 +101,7 @@ async def run_paper_reconciliation() -> ReconciliationResult:
             True, True, True, "reconciliation disabled", "0", 0
         )
         _STATE["healthy"] = True
+        _STATE["halted"] = False
         _STATE["last_run_at"] = utc_now().isoformat()
         _STATE["last_result"] = result.to_dict()
         return result
@@ -72,34 +109,100 @@ async def run_paper_reconciliation() -> ReconciliationResult:
     session = get_paper_session()
     paper = session.paper
     cash = paper.state.cash
+    mismatches: list[Mismatch] = []
     cash_ok = cash >= Decimal("0")
+    if not cash_ok:
+        mismatches.append(
+            Mismatch(
+                field="cash",
+                expected=">=0",
+                observed=str(cash),
+                difference=str(cash),
+                severity="critical",
+            )
+        )
+
     positions_ok = True
-    for _symbol, pos in paper.state.positions.items():
+    for symbol, pos in paper.state.positions.items():
         if pos.quantity < 0:
             positions_ok = False
-        # Reconstruct rough notional sanity
+            mismatches.append(
+                Mismatch(
+                    field=f"position.{symbol}.quantity",
+                    expected=">=0",
+                    observed=str(pos.quantity),
+                    difference=str(pos.quantity),
+                    severity="critical",
+                )
+            )
         if pos.entry_price <= 0 or pos.current_price < 0:
             positions_ok = False
+            mismatches.append(
+                Mismatch(
+                    field=f"position.{symbol}.price",
+                    expected=">0 entry, >=0 mark",
+                    observed=f"entry={pos.entry_price} mark={pos.current_price}",
+                    difference="invalid",
+                    severity="critical",
+                )
+            )
 
     # Rebuild cash from fills if fills exist (detect ledger drift).
     reconstructed = settings.paper_starting_balance
     for fill in paper.state.fills:
         notional = fill.quantity * fill.price
-        if fill.side.value.lower() == "buy":
+        side = fill.side.value.lower()
+        if side == "buy":
             reconstructed -= notional + fill.fee
         else:
             reconstructed += notional - fill.fee
     drift = abs(reconstructed - cash)
-    # Allow tiny rounding drift
     drift_ok = drift <= Decimal("0.05") or len(paper.state.fills) == 0
-    healthy = cash_ok and positions_ok and drift_ok
+    if not drift_ok:
+        mismatches.append(
+            Mismatch(
+                field="cash_vs_fill_ledger",
+                expected=str(reconstructed),
+                observed=str(cash),
+                difference=str(drift),
+                severity="critical",
+            )
+        )
+
+    # Equity invariant: cash + marked positions ≈ equity (tolerance).
+    marked = sum(
+        (p.quantity * p.current_price for p in paper.state.positions.values()),
+        Decimal("0"),
+    )
+    equity = cash + marked
+    # Fill quantity cannot exceed order quantity.
+    for order in paper.state.orders.values():
+        filled_qty = sum(
+            (f.quantity for f in paper.state.fills if f.order_id == order.id),
+            Decimal("0"),
+        )
+        if filled_qty > order.quantity:
+            positions_ok = False
+            mismatches.append(
+                Mismatch(
+                    field=f"order.{order.id}.filled_qty",
+                    expected=f"<={order.quantity}",
+                    observed=str(filled_qty),
+                    difference=str(filled_qty - order.quantity),
+                    severity="critical",
+                )
+            )
+
+    healthy = cash_ok and positions_ok and drift_ok and not mismatches
     detail = "ok"
-    if not cash_ok:
-        detail = "negative cash"
-    elif not positions_ok:
-        detail = "invalid position state"
-    elif not drift_ok:
-        detail = f"cash drift {drift} vs fill ledger"
+    if not healthy:
+        detail = mismatches[0].field if mismatches else "reconciliation_failed"
+        if not cash_ok:
+            detail = "negative cash"
+        elif not positions_ok:
+            detail = "invalid position or fill state"
+        elif not drift_ok:
+            detail = f"cash drift {drift} vs fill ledger"
 
     result = ReconciliationResult(
         healthy=healthy,
@@ -108,8 +211,12 @@ async def run_paper_reconciliation() -> ReconciliationResult:
         detail=detail,
         cash=str(cash),
         position_count=len(paper.state.positions),
+        mismatches=mismatches,
+        equity=str(equity),
+        reconstructed_cash=str(reconstructed),
     )
     _STATE["healthy"] = healthy
+    _STATE["halted"] = not healthy
     _STATE["last_run_at"] = utc_now().isoformat()
     _STATE["last_result"] = result.to_dict()
 
@@ -119,4 +226,40 @@ async def run_paper_reconciliation() -> ReconciliationResult:
         "reconciliation_complete",
         extra={"healthy": healthy, "detail": detail, "cash": str(cash)},
     )
+
+    if persist:
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+            from app.db.base import create_engine
+            from app.services import paper_persistence as store
+            from app.services.cycle_lock import save_reconciliation_report
+
+            engine = create_engine()
+            factory = async_sessionmaker(
+                engine, expire_on_commit=False, class_=AsyncSession
+            )
+            async with factory() as db:
+                await save_reconciliation_report(
+                    db,
+                    healthy=healthy,
+                    detail=detail,
+                    cash=str(cash),
+                    position_count=len(paper.state.positions),
+                    payload=result.to_dict(),
+                )
+                await store.save_reconciliation_halt(
+                    db, halted=not healthy, detail=detail
+                )
+                await store.append_audit_event(
+                    db,
+                    event_type="RECONCILIATION",
+                    message=detail,
+                    severity="critical" if not healthy else "info",
+                    payload={"healthy": healthy, "mismatches": len(mismatches)},
+                )
+            await engine.dispose()
+        except Exception:
+            logger.warning("reconciliation_persist_failed")
+
     return result

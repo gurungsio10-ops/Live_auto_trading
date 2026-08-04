@@ -48,9 +48,15 @@ async def test_health_ready_status() -> None:
 async def test_run_paper_cycle_and_portfolio() -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        denied = await client.post(
+            "/api/v1/paper/cycle/run",
+            json={"symbol": "BTC/USDT", "timeframe": "1m"},
+        )
+        assert denied.status_code in {401, 503}
         res = await client.post(
             "/api/v1/paper/cycle/run",
             json={"symbol": "BTC/USDT", "timeframe": "1m"},
+            headers={"X-Admin-Token": "test-admin-token"},
         )
         assert res.status_code == 200
         body = res.json()

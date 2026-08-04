@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     reconciliation_interval_seconds: int = Field(
         default=120, ge=30, validation_alias="RECONCILIATION_INTERVAL_SECONDS"
     )
+    scheduler_failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="SCHEDULER_FAILURE_THRESHOLD",
+    )
+    cycle_lock_ttl_seconds: int = Field(
+        default=120,
+        ge=10,
+        validation_alias="CYCLE_LOCK_TTL_SECONDS",
+    )
 
     # Paper execution (env-driven; Decimal only)
     paper_starting_balance: Decimal = Field(
