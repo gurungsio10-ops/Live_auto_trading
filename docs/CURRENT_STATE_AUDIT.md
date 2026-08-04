@@ -76,6 +76,7 @@ Live money path remains correctly blocked.
 8. E2E restart + kill-switch persistence tests  
 9. Runbook + audit/report docs + README  
 
-## Verified completion baseline (before this work)
+## Verified completion (after this implementation pass)
 
-~65% for durable paper E2E (cycle works; restart/persistence/mode UX incomplete).
+~88% durable paper E2E: modes, hydrate, idempotent restart test, fills page, live hard-block.
+Remaining: continuous paper loop, full ORM hydrate of fills/orders, admin-auth on all dashboard mutators.
