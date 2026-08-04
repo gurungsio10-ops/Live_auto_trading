@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.ai import TradingAnalyst
+from app.api.deps import AdminAuthDep
 from app.core.config import get_settings
 from app.core.security import redact_settings
 from app.execution.live_gate import LiveTradingGate
@@ -54,7 +55,7 @@ async def equity_curve() -> list[dict]:
 
 
 @router.post("/controls/kill-switch")
-async def kill_switch(body: KillSwitchBody) -> dict:
+async def kill_switch(body: KillSwitchBody, _: AdminAuthDep) -> dict:
     from app.services.paper_session import get_paper_session
 
     result = get_paper_session().set_kill_switch(body.enabled)
@@ -66,7 +67,7 @@ async def kill_switch(body: KillSwitchBody) -> dict:
 
 
 @router.post("/controls/pause")
-async def pause_trading(paused: bool = True) -> dict:
+async def pause_trading(_: AdminAuthDep, paused: bool = True) -> dict:
     from app.services.paper_session import get_paper_session
 
     return get_paper_session().set_paused(paused)
@@ -86,7 +87,7 @@ async def strategies() -> list[dict]:
 
 
 @router.post("/controls/strategy")
-async def strategy_control(body: StrategyControlBody) -> dict:
+async def strategy_control(body: StrategyControlBody, _: AdminAuthDep) -> dict:
     # Paper-only control surface — does not touch live gates.
     return {
         "strategy_id": body.strategy_id,
@@ -121,8 +122,11 @@ async def live_gate_status() -> dict:
     result = LiveTradingGate().evaluate()
     return {
         "allowed": result.allowed,
+        "checklist_complete": result.checklist_complete,
         "failed_conditions": result.failed_conditions,
         "reason_code": result.reason_code.value if result.reason_code else None,
+        "details": result.details,
+        "live_execution_hard_blocked": True,
     }
 
 

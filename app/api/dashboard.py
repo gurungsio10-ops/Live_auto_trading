@@ -1,9 +1,7 @@
 """
 Live dashboard endpoints (root-level, matching the Next.js proxy contract).
 
-These are backed by the in-memory :class:`PaperSession`, which routes every order
-through the risk engine and paper execution engine. Mounted without the ``/api``
-prefix so the frontend's ``backendFetch`` paths resolve here.
+Mutating endpoints require ``X-Admin-Token`` / Bearer admin token.
 """
 
 from __future__ import annotations
@@ -13,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.api.deps import AdminAuthDep
 from app.services.paper_session import get_paper_session
 
 router = APIRouter(tags=["dashboard"])
@@ -74,7 +73,7 @@ async def positions() -> list[dict]:
 
 
 @router.post("/positions/close")
-async def close_position(body: ClosePositionBody) -> list[dict]:
+async def close_position(body: ClosePositionBody, _: AdminAuthDep) -> list[dict]:
     return await get_paper_session().close_position(body.symbol)
 
 
@@ -88,7 +87,7 @@ async def orders(
 
 
 @router.post("/orders")
-async def place_order(body: OrderTicketBody) -> dict:
+async def place_order(body: OrderTicketBody, _: AdminAuthDep) -> dict:
     return await get_paper_session().place_order(body.model_dump())
 
 
@@ -108,7 +107,7 @@ async def strategies() -> list[dict]:
 
 
 @router.post("/strategies/select")
-async def select_strategy(body: SelectStrategyBody) -> dict:
+async def select_strategy(body: SelectStrategyBody, _: AdminAuthDep) -> dict:
     try:
         return get_paper_session().select_strategy(body.strategy_id)
     except KeyError:
@@ -116,7 +115,7 @@ async def select_strategy(body: SelectStrategyBody) -> dict:
 
 
 @router.post("/strategies/{strategy_id}/start")
-async def start_strategy(strategy_id: str) -> dict:
+async def start_strategy(strategy_id: str, _: AdminAuthDep) -> dict:
     try:
         return await get_paper_session().start_strategy(strategy_id)
     except KeyError:
@@ -124,7 +123,7 @@ async def start_strategy(strategy_id: str) -> dict:
 
 
 @router.post("/strategies/{strategy_id}/stop")
-async def stop_strategy(strategy_id: str) -> dict:
+async def stop_strategy(strategy_id: str, _: AdminAuthDep) -> dict:
     try:
         return get_paper_session().stop_strategy(strategy_id)
     except KeyError:
@@ -132,7 +131,7 @@ async def stop_strategy(strategy_id: str) -> dict:
 
 
 @router.patch("/strategies/{strategy_id}/params")
-async def update_params(strategy_id: str, body: ParamsBody) -> dict:
+async def update_params(strategy_id: str, body: ParamsBody, _: AdminAuthDep) -> dict:
     session = get_paper_session()
     try:
         return session.update_params(strategy_id, body.paper_params)
@@ -143,12 +142,12 @@ async def update_params(strategy_id: str, body: ParamsBody) -> dict:
 
 
 @router.post("/kill-switch")
-async def kill_switch(body: KillSwitchBody) -> dict:
+async def kill_switch(body: KillSwitchBody, _: AdminAuthDep) -> dict:
     return get_paper_session().set_kill_switch(body.enabled)
 
 
 @router.post("/trading/pause")
-async def pause_trading(body: PauseBody) -> dict:
+async def pause_trading(body: PauseBody, _: AdminAuthDep) -> dict:
     return get_paper_session().set_paused(body.paused)
 
 
@@ -168,5 +167,5 @@ async def backtests() -> list[dict]:
 
 
 @router.post("/backtests")
-async def run_backtest(body: BacktestBody) -> dict:
+async def run_backtest(body: BacktestBody, _: AdminAuthDep) -> dict:
     return get_paper_session().run_backtest(body.model_dump())

@@ -23,7 +23,11 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 - Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
 - Frontend: `npm --prefix frontend run lint`, `npm run typecheck`, `npm run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`).
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
+- **All dashboard mutators** (`/kill-switch`, `/orders`, `/trading/pause`, strategy select/start/stop/params, backtests, legacy `/api/controls/*`) also require `ADMIN_API_TOKEN`. Next.js BFF routes forward it via `adminHeaders()` from `frontend/lib/backend.ts`. Mutating BFFs **fail closed** (HTTP 503) when the backend is down — they must not invent APPROVED orders or kill-switch success.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
+- `GET /ready` probes the database (`SELECT 1`). LIVE runtime always returns `not_ready`. PAPER and TESTNET can be ready when DB is up.
+- `LiveTradingGate.evaluate()` never returns `allowed=True` in this phase (hard-blocked). Use `checklist_complete` for readiness inspection; include `LIVE_STARTUP_ACK=I_UNDERSTAND_LIVE_TRADING_RISKS` among checklist conditions.
+- Registered strategies: `ema_crossover`, `ema_trend`, `rsi_mean_reversion`, `breakout`.
 
 ### Live dashboard data & the demo fallback
 

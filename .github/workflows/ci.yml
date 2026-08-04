@@ -48,6 +48,24 @@ jobs:
           rm -f migrate-ci.db
           alembic upgrade head
 
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

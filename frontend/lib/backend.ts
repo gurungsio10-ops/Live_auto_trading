@@ -69,3 +69,16 @@ export function envelope<T>(
     meta: backend_error ? { demo, backend_error } : { demo },
   };
 }
+
+/** Headers for mutating FastAPI endpoints protected by ADMIN_API_TOKEN. */
+export function adminHeaders(
+  extra?: Record<string, string>,
+): Record<string, string> {
+  const token =
+    process.env.ADMIN_API_TOKEN ?? process.env.ATLAS_ADMIN_API_TOKEN ?? "";
+  const headers: Record<string, string> = { ...(extra ?? {}) };
+  if (token) {
+    headers["X-Admin-Token"] = token;
+  }
+  return headers;
+}

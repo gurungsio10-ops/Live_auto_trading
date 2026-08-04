@@ -1,4 +1,4 @@
-"""Phase 13.5 + 14: testnet client and live gating (all 9 conditions)."""
+"""Phase 13.5 + 14: testnet client and live gating (hard-blocked)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,12 @@ from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.execution.exchange import ExchangeTestnetClient
-from app.execution.live_gate import LIVE_CONDITIONS, LiveReadinessState, LiveTradingGate
+from app.execution.live_gate import (
+    LIVE_CONDITIONS,
+    LIVE_STARTUP_ACK_VALUE,
+    LiveReadinessState,
+    LiveTradingGate,
+)
 from app.models.domain.enums import (
     OrderSide,
     OrderStatus,
@@ -51,6 +56,7 @@ def _live_settings(**overrides) -> Settings:
         trading_mode="live",
         live_trading_enabled=True,
         kill_switch_enabled=False,
+        live_startup_ack=LIVE_STARTUP_ACK_VALUE,
         exchange_api_key=SecretStr("key-123456789012345678901234"),
         exchange_api_secret=SecretStr("secret-123456789012345678901234"),
         _env_file=None,
@@ -59,15 +65,17 @@ def _live_settings(**overrides) -> Settings:
     return Settings(**data)
 
 
-def test_live_gate_all_nine_pass():
+def test_live_gate_checklist_complete_still_hard_blocked():
     gate = LiveTradingGate(
         _live_settings(),
         LiveReadinessState(live_approval_valid=True),
     )
     result = gate.evaluate()
-    assert result.allowed is True
+    assert result.allowed is False
+    assert result.checklist_complete is True
     assert result.failed_conditions == []
-    assert set(result.details) == set(LIVE_CONDITIONS)
+    assert set(result.details or {}) >= set(LIVE_CONDITIONS)
+    assert (result.details or {}).get("live_execution_hard_blocked") is True
 
 
 @pytest.mark.parametrize(
@@ -75,6 +83,7 @@ def test_live_gate_all_nine_pass():
     [
         ({"trading_mode": "paper"}, {}, "trading_mode_live"),
         ({"live_trading_enabled": False}, {}, "live_trading_enabled"),
+        ({"live_startup_ack": ""}, {}, "live_startup_ack"),
         ({"kill_switch_enabled": True}, {}, "kill_switch_off"),
         (
             {"exchange_api_key": None, "exchange_api_secret": None},
@@ -104,4 +113,5 @@ def test_each_live_condition_blocks_individually(
     )
     result = gate.evaluate()
     assert result.allowed is False
+    assert result.checklist_complete is False
     assert expected_condition in result.failed_conditions

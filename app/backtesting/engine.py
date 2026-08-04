@@ -87,10 +87,41 @@ class BacktestEngine:
         peak = cash
 
         # Process bar i using only candles[: i+1] — no look-ahead.
+        # SL/TP from a prior entry are evaluated on subsequent bars only
+        # (next-bar fills) to avoid same-bar optimistic exits.
         for i in range(len(candles)):
             window = candles[: i + 1]
             bar = window[-1]
             mark = bar.close
+
+            # Next-bar SL/TP: only for positions opened on a prior bar.
+            if (
+                position is not None
+                and position.opened_at is not None
+                and position.opened_at < bar.open_time
+            ):
+                exited, exit_price, reason = self._check_stop_take(position, bar)
+                if exited and exit_price is not None:
+                    fill = self._apply_costs(exit_price, side=OrderSide.SELL)
+                    proceeds = fill["price"] * position.quantity
+                    fees = fill["fee"] * position.quantity
+                    slip = fill["slippage_cost"] * position.quantity
+                    cash += proceeds - fees
+                    pnl = (
+                        fill["price"] - position.entry_price
+                    ) * position.quantity - fees
+                    if open_trade:
+                        open_trade.exit_time = bar.open_time
+                        open_trade.exit_price = fill["price"]
+                        open_trade.pnl = pnl
+                        open_trade.fees += fees
+                        open_trade.slippage_cost += slip
+                        open_trade.reason = reason
+                        trades.append(open_trade)
+                    position = None
+                    open_trade = None
+                    bars_held = 0
+
             unrealized = Decimal("0")
             if position is not None:
                 unrealized = (mark - position.entry_price) * position.quantity
@@ -179,43 +210,6 @@ class BacktestEngine:
                 open_trade = None
                 bars_held = 0
 
-            # Hard stop / take-profit check on same bar after signal (using bar low/high)
-            if position is not None:
-                exited = False
-                exit_price = None
-                reason = ""
-                if position.stop_loss is not None and bar.low <= position.stop_loss:
-                    exit_price = position.stop_loss
-                    reason = "stop-loss"
-                    exited = True
-                elif (
-                    position.take_profit is not None
-                    and bar.high >= position.take_profit
-                ):
-                    exit_price = position.take_profit
-                    reason = "take-profit"
-                    exited = True
-                if exited and exit_price is not None:
-                    fill = self._apply_costs(exit_price, side=OrderSide.SELL)
-                    proceeds = fill["price"] * position.quantity
-                    fees = fill["fee"] * position.quantity
-                    slip = fill["slippage_cost"] * position.quantity
-                    cash += proceeds - fees
-                    pnl = (
-                        fill["price"] - position.entry_price
-                    ) * position.quantity - fees
-                    if open_trade:
-                        open_trade.exit_time = bar.open_time
-                        open_trade.exit_price = fill["price"]
-                        open_trade.pnl = pnl
-                        open_trade.fees += fees
-                        open_trade.slippage_cost += slip
-                        open_trade.reason = reason
-                        trades.append(open_trade)
-                    position = None
-                    open_trade = None
-                    bars_held = 0
-
         # Force close at end
         if position is not None:
             mark = candles[-1].close
@@ -262,6 +256,17 @@ class BacktestEngine:
                 result, self.config.report_dir
             )
         return result
+
+    @staticmethod
+    def _check_stop_take(
+        position: Position, bar: Candle
+    ) -> tuple[bool, Decimal | None, str]:
+        """Evaluate SL before TP when both are touched on the same bar (conservative)."""
+        if position.stop_loss is not None and bar.low <= position.stop_loss:
+            return True, position.stop_loss, "stop-loss"
+        if position.take_profit is not None and bar.high >= position.take_profit:
+            return True, position.take_profit, "take-profit"
+        return False, None, ""
 
     def _size_position(self, cash: Decimal, price: Decimal) -> Decimal:
         notional = cash * self.config.position_size_fraction

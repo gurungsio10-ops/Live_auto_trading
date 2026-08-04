@@ -64,6 +64,22 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
         "description": "Dual EMA crossover with ATR-based stops. Deterministic, no LLM in path.",
         "timeframe": "1h",
     },
+    "rsi_mean_reversion": {
+        "governance_status": "PAPER",
+        "description": (
+            "RSI oversold/overbought mean-reversion, long-only. "
+            "Deterministic — not marketed as profitable."
+        ),
+        "timeframe": "1h",
+    },
+    "breakout": {
+        "governance_status": "PAPER",
+        "description": (
+            "Donchian breakout using prior N-bar high/low (excludes current bar). "
+            "Long-only, deterministic."
+        ),
+        "timeframe": "1h",
+    },
 }
 
 

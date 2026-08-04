@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendFetch, envelope } from "@/lib/backend";
+import { adminHeaders, backendFetch, envelope } from "@/lib/backend";
 import { demoState } from "@/lib/mock-data";
 import type { Order, OrderTicketPayload } from "@/lib/types";
 
@@ -41,32 +41,19 @@ export async function POST(req: NextRequest) {
   try {
     const data = await backendFetch<Order>("/orders", {
       method: "POST",
+      headers: adminHeaders(),
       body: JSON.stringify(body),
     });
     return NextResponse.json(envelope(data, false));
   } catch (err) {
-    const now = new Date().toISOString();
-    const order: Order = {
-      id: `ord_demo_${Date.now().toString(36)}`,
-      client_order_id: `paper-${Date.now().toString(36)}`,
-      symbol: body.symbol,
-      side: body.side,
-      order_type: body.order_type,
-      quantity: body.quantity,
-      filled_quantity: body.order_type === "market" ? body.quantity : "0",
-      price: body.price ?? null,
-      average_fill_price: body.order_type === "market" ? body.price ?? "65000" : null,
-      status: body.order_type === "market" ? "FILLED" : "SUBMITTED",
-      strategy_name: body.strategy_name ?? "manual",
-      risk_decision: "APPROVED",
-      risk_reason_code: "OK",
-      created_at: now,
-      updated_at: now,
-      fees: "0.00",
-    };
-    demoState.orders = [order, ...demoState.orders];
+    // Fail closed — never invent APPROVED/FILLED paper orders offline.
     return NextResponse.json(
-      envelope(order, true, err instanceof Error ? err.message : "backend down"),
+      envelope(
+        null,
+        false,
+        err instanceof Error ? err.message : "backend down — order not submitted",
+      ),
+      { status: 503 },
     );
   }
 }
