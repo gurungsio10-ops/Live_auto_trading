@@ -363,21 +363,17 @@ async def run_paper_trading_cycle(
         _LAST_CYCLE = result
         return result
 
-    # Acquire DB cycle lock (final uniqueness protection).
+    # Acquire DB cycle lock (final uniqueness protection) via shared engine.
     lock_owner: str | None = None
     lock_key: str | None = None
-    lock_session_factory = None
-    lock_engine = None
     lock_status = "memory_only"
     try:
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-        from app.db.base import create_engine
+        from app.db.base import Base, get_shared_engine, session_scope
+        from app.services import cycle_lock as _cycle_lock_models  # noqa: F401
         from app.services.cycle_lock import (
             LockStatus,
             acquire_cycle_lock,
             make_cycle_lock_key,
-            release_cycle_lock,
         )
 
         lock_key = make_cycle_lock_key(
@@ -388,11 +384,12 @@ async def run_paper_trading_cycle(
             timeframe=timeframe,
             candle_open_time=target.open_time,
         )
-        lock_engine = create_engine()
-        lock_session_factory = async_sessionmaker(
-            lock_engine, expire_on_commit=False, class_=AsyncSession
-        )
-        async with lock_session_factory() as lock_db:
+        # Ensure lock tables exist (dev/sqlite safety).
+        engine = get_shared_engine()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_scope() as lock_db:
             acquired = await acquire_cycle_lock(
                 lock_db,
                 lock_key=lock_key,
@@ -412,7 +409,6 @@ async def run_paper_trading_cycle(
                     lock_status="held",
                 )
                 _LAST_CYCLE = result
-                await lock_engine.dispose()
                 return result
             if acquired.status == LockStatus.ACQUIRED and acquired.lock is not None:
                 lock_owner = acquired.lock.owner
@@ -421,13 +417,21 @@ async def run_paper_trading_cycle(
                 lock_status = "unavailable"
     except Exception:
         lock_status = "unavailable"
-        if lock_engine is not None:
-            try:
-                await lock_engine.dispose()
-            except Exception:
-                pass
-            lock_engine = None
-            lock_session_factory = None
+
+    if lock_status == "unavailable" and settings.cycle_lock_fail_closed:
+        result = _empty_result(
+            correlation_id=correlation_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            orch=orch,
+            reason="cycle lock layer unavailable",
+            message="Cycle rejected: lock unavailable (fail-closed)",
+            reject_reason="CYCLE_LOCK_UNAVAILABLE",
+            candle_open_time=ensure_utc(target.open_time),
+            lock_status="unavailable",
+        )
+        _LAST_CYCLE = result
+        return result
 
     try:
         # Evaluate on the tip before execution so cycle metadata reflects the
@@ -513,20 +517,14 @@ async def run_paper_trading_cycle(
         )
         # Best-effort durable persistence (cycle keys + portfolio checkpoint).
         try:
-            from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-            from app.db.base import create_engine
+            from app.db.base import session_scope
             from app.services import paper_persistence as store
             from app.services.paper_session import (
                 get_paper_session,
                 persist_paper_session,
             )
 
-            engine = create_engine()
-            factory = async_sessionmaker(
-                engine, expire_on_commit=False, class_=AsyncSession
-            )
-            async with factory() as session:
+            async with session_scope() as session:
                 await persist_cycle_keys(session)
                 session_paper = get_paper_session()
                 if orch.paper is session_paper.paper:
@@ -564,7 +562,6 @@ async def run_paper_trading_cycle(
                         "lock_status": lock_status,
                     },
                 )
-            await engine.dispose()
         except Exception:
             logger.warning(
                 "paper_cycle_persist_failed",
@@ -583,23 +580,15 @@ async def run_paper_trading_cycle(
             )
         return result
     finally:
-        if (
-            lock_owner
-            and lock_key
-            and lock_session_factory is not None
-            and lock_engine is not None
-        ):
+        if lock_owner and lock_key:
             try:
+                from app.db.base import session_scope
                 from app.services.cycle_lock import release_cycle_lock
 
-                async with lock_session_factory() as lock_db:
+                async with session_scope() as lock_db:
                     await release_cycle_lock(
                         lock_db, lock_key=lock_key, owner=lock_owner
                     )
-            except Exception:
-                pass
-            try:
-                await lock_engine.dispose()
             except Exception:
                 pass
 

@@ -258,6 +258,28 @@ class PaperTradingEngine:
             {"ts": utc_now().isoformat(), "event": event, "data": data}
         )
 
+    async def cancel(self, order_id: str) -> Order:
+        """Cancel an open order before fill when still technically open."""
+        order = self.state.orders.get(order_id)
+        if order is None:
+            raise KeyError(f"unknown order {order_id}")
+        cancellable = {
+            OrderStatus.CREATED,
+            OrderStatus.RISK_PENDING,
+            OrderStatus.APPROVED,
+            OrderStatus.SUBMITTED,
+            OrderStatus.PARTIALLY_FILLED,
+        }
+        if order.status not in cancellable:
+            return order
+        # Partial fills keep filled qty; remaining is cancelled.
+        updated = order.model_copy(
+            update={"status": OrderStatus.CANCELLED, "updated_at": utc_now()}
+        )
+        self.state.orders[order_id] = updated
+        self._journal("ORDER_CANCELLED", {"id": order_id})
+        return updated
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "cash": str(self.state.cash),

@@ -138,3 +138,75 @@ async def ai_explain_trade(record: dict[str, Any]) -> dict:
 @router.post("/ai/summarize-session")
 async def ai_summarize(events: list[dict[str, Any]]) -> dict:
     return _analyst.summarize_session(events).to_api_dict()
+
+
+@router.post("/ai/score-signal")
+async def ai_score_signal(payload: dict[str, Any]) -> dict:
+    """
+    Advisory opportunity score. Never submits orders.
+
+    Accepts a simplified signal payload from the journal/dashboard.
+    """
+    from decimal import Decimal
+
+    from app.ai.decision import AdvisoryDecisionEngine
+    from app.core.time import utc_now
+    from app.models.domain.enums import SignalDirection
+    from app.models.domain.trading import TradeSignal
+
+    direction = str(payload.get("direction") or "hold").lower()
+    try:
+        sig_dir = SignalDirection(direction)
+    except ValueError:
+        sig_dir = SignalDirection.HOLD
+    signal = TradeSignal(
+        strategy_name=str(payload.get("strategy_name") or "advisory"),
+        strategy_version=str(payload.get("strategy_version") or "0"),
+        symbol=str(payload.get("symbol") or get_settings().default_symbol),
+        direction=sig_dir,
+        confidence=Decimal(str(payload.get("confidence") or "0.5")),
+        entry_rationale=str(payload.get("reason") or payload.get("rationale") or ""),
+        invalidation_condition=str(payload.get("invalidation_condition") or "advisory"),
+        input_data_fingerprint=str(payload.get("input_data_fingerprint") or "advisory"),
+        suggested_entry=(
+            Decimal(str(payload["suggested_entry"]))
+            if payload.get("suggested_entry") is not None
+            else None
+        ),
+        suggested_stop=(
+            Decimal(str(payload["suggested_stop"]))
+            if payload.get("suggested_stop") is not None
+            else None
+        ),
+        suggested_target=(
+            Decimal(str(payload["suggested_target"]))
+            if payload.get("suggested_target") is not None
+            else None
+        ),
+        timestamp=utc_now(),
+        metadata={"indicators": payload.get("indicators") or {}},
+    )
+    decision = AdvisoryDecisionEngine().evaluate(
+        signal,
+        volatility=(
+            Decimal(str(payload["volatility"]))
+            if payload.get("volatility") is not None
+            else None
+        ),
+        funding_rate=(
+            Decimal(str(payload["funding_rate"]))
+            if payload.get("funding_rate") is not None
+            else None
+        ),
+        open_interest=(
+            Decimal(str(payload["open_interest"]))
+            if payload.get("open_interest") is not None
+            else None
+        ),
+        trend_strength=(
+            Decimal(str(payload["trend_strength"]))
+            if payload.get("trend_strength") is not None
+            else None
+        ),
+    )
+    return decision.to_dict()

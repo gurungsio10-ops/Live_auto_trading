@@ -110,6 +110,15 @@ class Settings(BaseSettings):
         ge=10,
         validation_alias="CYCLE_LOCK_TTL_SECONDS",
     )
+    cycle_lock_fail_closed: bool = Field(
+        default=True,
+        validation_alias="CYCLE_LOCK_FAIL_CLOSED",
+    )
+    cors_allowed_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        validation_alias="CORS_ALLOWED_ORIGINS",
+    )
+    enable_ops_sse: bool = Field(default=True, validation_alias="ENABLE_OPS_SSE")
 
     # Paper execution (env-driven; Decimal only)
     paper_starting_balance: Decimal = Field(

@@ -37,5 +37,10 @@ Key behaviours to know:
 - `PaperSession` is process-local but **hydrated from PostgreSQL/SQLite on startup** (`bootstrap_paper_runtime`): kill switch, trading_enabled, trading_paused, portfolio checkpoint, cycle idempotency keys, and journal orders/fills. A restart must not wipe the paper account unless `POST /api/paper/reset` is called with admin auth + `RESET_PAPER_ACCOUNT`.
 - **Every order still routes through the risk engine** (`OrderGateway` → `app/risk/engine.py`) before the paper engine — nothing bypasses risk checks.
 - Canonical cycle path: `run_paper_trading_cycle` with DB cycle locks (`cycle_locks`), journal attachment, post-cycle reconciliation, and fail-closed readiness when reconciliation is unhealthy.
+- Shared DB pool: use `app.db.base.session_scope` / `get_shared_engine` (not per-request `create_engine().dispose()`). `CYCLE_LOCK_FAIL_CLOSED=true` rejects cycles when the lock layer is unavailable.
+- MarketDataHub (`app/market_data/hub.py`) is the unified observation interface; funding/OI are **advisory only**. Ops SSE: `GET /ops/stream` (proxied by `frontend/app/api/ops/stream`).
+- PortfolioManager (`app/portfolio/manager.py`) wraps PaperSession for period PnL/exposure; leverage remains `1` (spot paper).
+- Advisory AI scoring: `POST /api/ai/score-signal` — never submits orders.
 - Scheduler is **disabled by default** (`ENABLE_TRADING_SCHEDULER=false`). It persists runs, tracks consecutive failures, and auto-pauses after `SCHEDULER_FAILURE_THRESHOLD`.
 - Mutating BFFs **fail closed** (HTTP 503) when the backend/auth is down — they must not invent APPROVED orders or successful cycles. Yellow "Demo data" on GET routes means the backend is unreachable.
+- CORS is restricted via `CORS_ALLOWED_ORIGINS`. Live money remains hard-blocked.
