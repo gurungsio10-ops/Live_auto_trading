@@ -43,9 +43,6 @@
 - `TRADING_MODE` defaults to `paper`; LIVE startup raises
 - Tests: see CI / local `pytest -q`
 
-## Gaps remaining (non-blocking for paper MVP)
+## Honest completion
 
-1. Full ORM hydrate of historical fills across restart
-2. Continuous multi-hour paper loop (MVP uses one-shot / start-stop flags)
-3. Live WebSocket → order path (intentionally unwired)
-4. Bybit private trading (out of scope — public market data only)
+~**85%** for a personal **paper trading MVP** (not live-ready). Remaining non-blocking gaps: continuous scheduler, full ORM fill hydrate across restart, Redis unused, live public OHLCV optional (offline fixtures default in CI).
