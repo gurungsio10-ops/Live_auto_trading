@@ -170,6 +170,8 @@ class PaperTradingEngine:
             release = self.state.reserved_cash
         self.state.reserved_cash -= release
         self.state.cash += release
+        if self.state.reserved_cash == 0:
+            self.state.reserved_cash = Decimal("0")
         new_remaining = remaining - release
         meta["reserved_remaining"] = str(new_remaining)
         if new_remaining <= 0:
