@@ -268,6 +268,17 @@ class TradingOrchestrator:
         if quantity <= 0:
             return None
 
+        # Honour PaperSession trading_paused when this orchestrator shares the
+        # dashboard/runtime paper ledger (not isolated CLI/unit orchestrators).
+        try:
+            from app.services.paper_session import get_paper_session
+
+            session = get_paper_session()
+            if self.paper is session.paper and session.trading_paused:
+                return None
+        except Exception:
+            pass
+
         self._seen_signal_fps.add(signal.input_data_fingerprint)
         coid = self._client_order_id(candle, signal.direction)
         request = OrderRequest(

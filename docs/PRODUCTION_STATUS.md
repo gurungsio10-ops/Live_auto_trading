@@ -1,3 +1,6 @@
+> **DEPRECATED:** Superseded by `docs/audits/consolidation_audit.md`,
+> `docs/audit/paper_v1_final_verification.md`, and `docs/releases/consolidation_release.md`.
+
 # Production Readiness Status
 
 **Date:** 2026-08-04  

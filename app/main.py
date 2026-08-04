@@ -109,8 +109,32 @@ app.add_middleware(
     allow_origins=_origins or ["http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Admin-Token"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Admin-Token",
+        "X-Request-ID",
+        "X-Correlation-ID",
+    ],
 )
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next: Any) -> Any:
+    """Propagate or mint a correlation/request id for ops tracing."""
+    from uuid import uuid4
+
+    cid = (
+        request.headers.get("X-Correlation-ID")
+        or request.headers.get("X-Request-ID")
+        or uuid4().hex
+    )
+    request.state.correlation_id = cid
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = cid
+    response.headers["X-Request-ID"] = cid
+    return response
+
 
 app.include_router(api_router, prefix="/api")
 app.include_router(mvp_router, prefix="/api")

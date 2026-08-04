@@ -1,7 +1,13 @@
 """
-MVP paper-trading API surface under ``/api/*`` (checklist contract).
+DEPRECATED alias surface under ``/api/*`` (checklist / ops compatibility).
 
-Delegates to existing paper session / cycle services. Live trading remains disabled.
+Canonical HTTP surfaces:
+- Dashboard UI → ``app/api/dashboard.py``
+- Versioned automation → ``app/api/v1.py``
+
+This module must not grow new business logic. All handlers delegate to the same
+``PaperSession`` / ``run_paper_trading_cycle`` authorities. Live trading remains
+disabled. Prefer ``/api/v1/*`` for new integrations.
 """
 
 from __future__ import annotations

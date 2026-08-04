@@ -26,9 +26,11 @@ Market data → candle validation → strategy → signal → OrderGateway → R
   → /api/v1 + dashboard (+ /recovery)
 ```
 
-Authoritative consolidation audit: `docs/audit/pr_consolidation_audit.md`  
+Authoritative consolidation audit: `docs/audits/consolidation_audit.md`  
+Security audit: `docs/audits/security_audit.md`  
 Merge plan: `docs/audit/release_merge_plan.md`  
-Verification: `docs/audit/paper_v1_final_verification.md`
+Verification: `docs/audit/paper_v1_final_verification.md`  
+Release notes: `docs/releases/consolidation_release.md`
 
 ## Migrations
 

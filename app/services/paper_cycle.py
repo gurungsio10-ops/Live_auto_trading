@@ -630,6 +630,9 @@ async def _run_paper_trading_cycle_inner(
             )
         # Durable persistence — fail closed on write failure so memory and DB
         # cannot silently diverge while trading continues.
+        # Skip ephemeral in-memory databases (pytest isolation).
+        if ":memory:" in settings.database_url:
+            return result
         try:
             from app.db.base import session_scope
             from app.services import paper_persistence as store

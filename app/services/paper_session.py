@@ -1,10 +1,13 @@
 """
-In-memory paper-trading session that wires the real engines together.
+Paper-trading session that wires the real engines together for the dashboard.
 
-This is the live data source behind the dashboard endpoints. Every order still
-flows through ``app/risk/engine.py`` (via ``OrderGateway``) before touching the
-paper execution engine — nothing here bypasses risk checks. State is process-local
-and resets on restart, which is appropriate for a paper/demo session.
+Runtime cache for the paper ledger (`PaperTradingEngine`). Durable source of
+truth is PostgreSQL/SQLite via ``hydrate_paper_session_from_db`` /
+``persist_paper_session`` (Alembic ``0006_paper_durable`` dual-write).
+
+Every order flows through ``OrderGateway`` → ``RiskEngine``. Strategy ticks
+delegate to ``run_paper_trading_cycle`` (canonical orchestration). Live money
+remains hard-blocked.
 """
 
 from __future__ import annotations
@@ -39,7 +42,6 @@ from app.models.domain.trading import (
     TradeSignal,
 )
 from app.risk.engine import RiskContext, RiskEngine, RiskEngineState
-from app.strategies.base import StrategyConfig, StrategyContext
 from app.strategies.registry import get_strategy, list_strategies
 
 # Reference prices used to synthesise a deterministic paper market per symbol.
@@ -145,9 +147,15 @@ class PaperSession:
         return _BASE_PRICES.get(symbol, Decimal(100))
 
     def _candles_from_closes(self, symbol: str, closes: list[Decimal]) -> list[Candle]:
+        from datetime import timedelta
+
         timeframe = _STRATEGY_META.get("ema_trend", {}).get("timeframe", "1h")
+        step_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(
+            timeframe, 60
+        )
         candles: list[Candle] = []
-        start = utc_now()
+        # Unique monotonic UTC open times — required by canonical cycle validation.
+        start = utc_now() - timedelta(minutes=step_minutes * max(len(closes), 1))
         n = len(closes)
         for i, close in enumerate(closes):
             close = close.quantize(Decimal("0.01"))
@@ -165,7 +173,7 @@ class PaperSession:
                 Candle(
                     symbol=symbol,
                     timeframe=timeframe,
-                    open_time=start,
+                    open_time=start + timedelta(minutes=step_minutes * i),
                     open=open_,
                     high=hi,
                     low=lo,
@@ -798,60 +806,107 @@ class PaperSession:
             return self._strategy_dict(strategy_id)
 
     async def run_strategy_tick(self, strategy_id: str) -> dict[str, Any]:
-        """Evaluate the strategy on the synthetic market and act on the signal."""
+        """Canonical tick: synthetic candles → ``run_paper_trading_cycle``.
+
+        Dashboard strategy start/tick no longer has a parallel order path.
+        Orders only submit via ``OrderGateway`` inside the shared orchestrator.
+        """
+        from app.execution.gateway import OrderGateway
+        from app.services import paper_cycle
+        from app.services.paper_cycle import ProvidedCandleSource, last_signal
+
         strategy = get_strategy(strategy_id)
         symbol = (self.settings.supported_symbols or ("BTC/USDT",))[0]
+        timeframe = str(
+            _STRATEGY_META.get(strategy_id, {}).get("timeframe")
+            or self.settings.default_timeframe
+        )
 
         with self._lock:
             self._ticks[symbol] = self._ticks.get(symbol, 0) + 3
-            candles = self._live_series(symbol)
+            raw = self._live_series(symbol)
+            candles = [
+                c
+                if c.timeframe == timeframe
+                else c.model_copy(update={"timeframe": timeframe})
+                for c in raw
+            ]
             mark = candles[-1].close
             self.paper.set_mark_price(symbol, mark)
-
             params = self.param_overrides.get(strategy_id) or dict(
                 strategy.default_config().params
             )
-            position = self.paper.state.positions.get(symbol)
-            ctx = StrategyContext(
-                candles=candles,
-                portfolio=self._portfolio_state(),
-                position=position,
-                indicators={"bars_held": 0},
-                config=StrategyConfig(
-                    strategy_id=strategy.strategy_id,
-                    version=strategy.version,
-                    params=params,
-                ),
-            )
-            signal = strategy.evaluate(ctx)
-            signal_id = f"sig_{uuid4().hex[:12]}"
-            self.signal_log.insert(0, self._signal_dict(signal, signal_id))
-            if len(self.signal_log) > 200:
-                self.signal_log = self.signal_log[:200]
 
-        acted: Order | None = None
-        if not self.trading_paused and not self.kill_switch_enabled:
-            if signal.direction == SignalDirection.BUY and position is None:
-                acted = await self._submit(
-                    symbol=symbol,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.MARKET,
-                    quantity=self._suggested_qty(symbol, mark),
-                    stop_loss=signal.suggested_stop,
-                    take_profit=signal.suggested_target,
-                    strategy_name=strategy.name,
-                    signal_id=signal_id,
-                )
-            elif signal.direction == SignalDirection.EXIT and position is not None:
-                acted = await self._close_symbol(symbol, strategy_name=strategy.name)
-        else:
-            # Record the halt as a risk event so the UI reflects why nothing traded.
-            if signal.direction in (SignalDirection.BUY, SignalDirection.EXIT):
-                self.set_kill_switch(self.kill_switch_enabled)
+        orch = paper_cycle.get_or_create_orchestrator(
+            symbol=symbol,
+            strategy_id=strategy_id,
+            settings=self.settings,
+            paper_engine=self.paper,
+        )
+        orch.strategy_params = dict(params)
+        orch.paper = self.paper
+        orch.risk = self.risk_engine
+        orch.gateway = OrderGateway(self.paper, self.risk_engine)
+        orch.kill_switch_enabled = self.kill_switch_enabled
 
+        result = await paper_cycle.run_paper_trading_cycle(
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_id=strategy_id,
+            candle_source=ProvidedCandleSource(candles=candles),
+            orchestrator=orch,
+            settings=self.settings,
+        )
+
+        signal_id = f"sig_{uuid4().hex[:12]}"
+        acted_id: str | None = result.order_id
         with self._lock:
+            sig = last_signal()
+            if sig is not None:
+                self.signal_log.insert(0, self._signal_dict(sig, signal_id))
+                if len(self.signal_log) > 200:
+                    self.signal_log = self.signal_log[:200]
+            elif result.signal_direction:
+                # Ensure UI still shows a decision row on HOLD / gated ticks.
+                self.signal_log.insert(
+                    0,
+                    {
+                        "id": signal_id,
+                        "strategy_name": strategy.name,
+                        "strategy_version": strategy.version,
+                        "symbol": symbol,
+                        "timestamp": utc_now().isoformat(),
+                        "direction": result.signal_direction,
+                        "confidence": "0",
+                        "entry_rationale": result.signal_reason,
+                        "invalidation_condition": "",
+                        "suggested_stop": None,
+                        "suggested_target": None,
+                        "suggested_entry": None,
+                    },
+                )
+            if acted_id:
+                order = self.paper.state.orders.get(acted_id)
+                if order is not None and all(
+                    o.id != order.id for o in self.order_history
+                ):
+                    self.order_history.insert(0, order)
+                    self._log_risk_event(order, requested=order.quantity)
+            elif self.kill_switch_enabled and result.signal_direction in {
+                SignalDirection.BUY.value,
+                SignalDirection.EXIT.value,
+                "buy",
+                "exit",
+            }:
+                self.set_kill_switch(True)
             self._record_equity_point()
-        return {"signal_id": signal_id, "acted": acted.id if acted else None}
+        return {
+            "signal_id": signal_id,
+            "acted": acted_id,
+            "canonical_cycle": True,
+            "correlation_id": result.correlation_id,
+            "idempotent_replay": result.idempotent_replay,
+        }
 
     def _suggested_qty(self, symbol: str, price: Decimal) -> Decimal:
         # Request ~10% of cash; the risk engine will size it down to limits.
