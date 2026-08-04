@@ -154,6 +154,7 @@ async def save_paper_checkpoint(
     idempotency_index: dict[str, str],
     fees_paid: Decimal = Decimal("0"),
     correlation_id: str | None = None,
+    fills: list[Any] | None = None,
 ) -> None:
     now = utc_now()
     # Upsert USDT balance
@@ -238,6 +239,23 @@ async def save_paper_checkpoint(
                 }
                 for symbol, pos in positions.items()
             },
+            "fills": [
+                {
+                    "id": f.id,
+                    "order_id": f.order_id,
+                    "symbol": f.symbol,
+                    "side": f.side.value if hasattr(f.side, "value") else str(f.side),
+                    "quantity": str(f.quantity),
+                    "price": str(f.price),
+                    "fee": str(f.fee),
+                    "timestamp": (
+                        f.timestamp.isoformat()
+                        if getattr(f, "timestamp", None) is not None
+                        else now.isoformat()
+                    ),
+                }
+                for f in (fills or [])
+            ],
             "updated_at": now.isoformat(),
         },
     )
@@ -328,3 +346,35 @@ def checkpoint_to_positions(payload: dict[str, Any]) -> dict[str, Position]:
             strategy_name=data.get("strategy_name"),
         )
     return positions
+
+
+def checkpoint_to_fills(payload: dict[str, Any]) -> list[Any]:
+    """Restore fill ledger from checkpoint when journal tables are empty."""
+    from datetime import datetime
+
+    from app.models.domain.enums import OrderSide
+    from app.models.domain.trading import Fill
+
+    out: list[Fill] = []
+    for raw in payload.get("fills") or []:
+        if not isinstance(raw, dict):
+            continue
+        ts = raw.get("timestamp")
+        timestamp = (
+            datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if isinstance(ts, str)
+            else utc_now()
+        )
+        out.append(
+            Fill(
+                id=str(raw.get("id") or uuid4().hex),
+                order_id=str(raw.get("order_id") or ""),
+                symbol=str(raw.get("symbol") or ""),
+                side=OrderSide(str(raw.get("side") or "buy").lower()),
+                quantity=_dec(raw.get("quantity") or "0"),
+                price=_dec(raw.get("price") or "0"),
+                fee=_dec(raw.get("fee") or "0"),
+                timestamp=timestamp,
+            )
+        )
+    return out

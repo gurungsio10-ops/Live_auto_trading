@@ -192,7 +192,7 @@ async def _run_one_cycle() -> None:
             status="failed",
             error=_LAST_ERROR,
         )
-        if _CONSECUTIVE_FAILURES >= settings.scheduler_failure_threshold:
+        if settings.scheduler_failure_threshold <= _CONSECUTIVE_FAILURES:
             _PAUSED_BY_FAILURES = True
             session.set_paused(True)
             logger.error(

@@ -276,7 +276,9 @@ async def scheduler_status_endpoint() -> dict[str, Any]:
 @router.post("/scheduler/start")
 async def scheduler_start(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
     if body.confirm != "START_SCHEDULER":
-        raise HTTPException(status_code=400, detail="confirm must equal START_SCHEDULER")
+        raise HTTPException(
+            status_code=400, detail="confirm must equal START_SCHEDULER"
+        )
     get_safety_guard().assert_paper_only()
     from app.services.trading_scheduler import scheduler_status, start_scheduler
 
@@ -289,7 +291,9 @@ async def scheduler_start(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
 @router.post("/scheduler/pause")
 async def scheduler_pause(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
     if body.confirm != "PAUSE_SCHEDULER":
-        raise HTTPException(status_code=400, detail="confirm must equal PAUSE_SCHEDULER")
+        raise HTTPException(
+            status_code=400, detail="confirm must equal PAUSE_SCHEDULER"
+        )
     from app.services.trading_scheduler import pause_scheduler
 
     status = await pause_scheduler()
@@ -309,7 +313,9 @@ async def scheduler_resume(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]
 
 
 @router.get("/scheduler/runs")
-async def scheduler_runs(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+async def scheduler_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from app.db.base import create_engine
@@ -322,7 +328,9 @@ async def scheduler_runs(limit: int = Query(default=20, ge=1, le=100)) -> dict[s
             items = await recent_scheduler_runs(db, limit=limit)
         return {"items": items, "total": len(items)}
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"scheduler runs unavailable: {exc}")
+        raise HTTPException(
+            status_code=503, detail=f"scheduler runs unavailable: {exc}"
+        ) from exc
     finally:
         await engine.dispose()
 

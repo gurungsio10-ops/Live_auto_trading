@@ -11,7 +11,7 @@ AI modules are never imported here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import uuid4
@@ -38,6 +38,10 @@ class CandleSource(Protocol):
     ) -> list[Candle]: ...
 
 
+# Stable anchor so offline fixture cycles are idempotent across retries.
+_OFFLINE_ANCHOR = datetime(2024, 1, 1, 0, 0, 0)
+
+
 @dataclass
 class OfflineCandleSource:
     """Deterministic offline candles for paper cycles without network."""
@@ -48,9 +52,11 @@ class OfflineCandleSource:
     async def load_closed_candles(
         self, symbol: str, timeframe: str, *, limit: int
     ) -> list[Candle]:
+
         candles = build_ema_crossover_candles(
             symbol=symbol,
             interval=timeframe,
+            start=_OFFLINE_ANCHOR.replace(tzinfo=UTC),
             base_price=self.base_price,
             force_buy_on_last=self.force_buy_on_last,
         )
@@ -227,7 +233,7 @@ def _empty_result(
     orch: TradingOrchestrator,
     reason: str,
     message: str,
-    reject_reason: str,
+    reject_reason: str | None,
     candle_open_time: datetime | None = None,
     accepted: bool = False,
     idempotent_replay: bool = False,
@@ -511,7 +517,10 @@ async def run_paper_trading_cycle(
 
             from app.db.base import create_engine
             from app.services import paper_persistence as store
-            from app.services.paper_session import get_paper_session, persist_paper_session
+            from app.services.paper_session import (
+                get_paper_session,
+                persist_paper_session,
+            )
 
             engine = create_engine()
             factory = async_sessionmaker(
@@ -536,6 +545,7 @@ async def run_paper_trading_cycle(
                         consecutive_losses=0,
                         idempotency_index=dict(orch.paper.state.idempotency_index),
                         correlation_id=correlation_id,
+                        fills=list(orch.paper.state.fills),
                     )
                 await store.append_audit_event(
                     session,

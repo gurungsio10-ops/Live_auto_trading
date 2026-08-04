@@ -23,7 +23,10 @@ from app.services.paper_session import (
     persist_paper_session,
     reset_paper_session,
 )
-from app.services.reconciliation import clear_reconciliation_halt, run_paper_reconciliation
+from app.services.reconciliation import (
+    clear_reconciliation_halt,
+    run_paper_reconciliation,
+)
 from app.services.sample_market import build_ema_crossover_candles
 
 
@@ -89,7 +92,7 @@ async def test_endurance_replay_with_restart_and_duplicates(tmp_path):
     for tip in range(60, mid, 15):
         window = candles[: tip + 1]
         source = paper_cycle.ProvidedCandleSource(candles=window)
-        result = await paper_cycle.run_paper_trading_cycle(
+        await paper_cycle.run_paper_trading_cycle(
             symbol=symbol,
             timeframe=timeframe,
             strategy_id="ema_crossover",
@@ -105,10 +108,9 @@ async def test_endurance_replay_with_restart_and_duplicates(tmp_path):
             candle_limit=120,
         )
         assert dup.idempotent_replay is True or dup.reject_reason in {
-            None,
             "RECONCILIATION_HALT",
             "CYCLE_LOCK_HELD",
-        }
+        }, (dup.idempotent_replay, dup.reject_reason, dup.message)
         session = get_paper_session()
         for f in session.paper.state.fills:
             fill_ids.add(f.id)

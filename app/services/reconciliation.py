@@ -147,27 +147,62 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
                 )
             )
 
-    # Rebuild cash from fills if fills exist (detect ledger drift).
+    # Rebuild cash from fills if the fill ledger explains open positions.
+    # Incomplete ledgers (e.g. hydrated positions without matching fills) must
+    # not invent a false critical halt via starting-balance reconstruction.
     reconstructed = settings.paper_starting_balance
+    net_qty: dict[str, Decimal] = {}
     for fill in paper.state.fills:
         notional = fill.quantity * fill.price
         side = fill.side.value.lower()
         if side == "buy":
             reconstructed -= notional + fill.fee
+            net_qty[fill.symbol] = (
+                net_qty.get(fill.symbol, Decimal("0")) + fill.quantity
+            )
         else:
             reconstructed += notional - fill.fee
-    drift = abs(reconstructed - cash)
-    drift_ok = drift <= Decimal("0.05") or len(paper.state.fills) == 0
-    if not drift_ok:
-        mismatches.append(
-            Mismatch(
-                field="cash_vs_fill_ledger",
-                expected=str(reconstructed),
-                observed=str(cash),
-                difference=str(drift),
-                severity="critical",
+            net_qty[fill.symbol] = (
+                net_qty.get(fill.symbol, Decimal("0")) - fill.quantity
             )
-        )
+
+    ledger_complete = True
+    for symbol, pos in paper.state.positions.items():
+        explained = net_qty.get(symbol, Decimal("0"))
+        if abs(explained - pos.quantity) > Decimal("0.00000001"):
+            ledger_complete = False
+            mismatches.append(
+                Mismatch(
+                    field=f"position.{symbol}.vs_fills",
+                    expected=str(pos.quantity),
+                    observed=str(explained),
+                    difference=str(pos.quantity - explained),
+                    severity="high",
+                )
+            )
+    for symbol, qty in net_qty.items():
+        if qty > 0 and symbol not in paper.state.positions:
+            ledger_complete = False
+
+    drift = abs(reconstructed - cash)
+    if len(paper.state.fills) == 0:
+        drift_ok = True
+        reconstructed = cash
+    elif not ledger_complete:
+        # Incomplete fill history — do not fail-closed on naive reconstruction.
+        drift_ok = True
+    else:
+        drift_ok = drift <= Decimal("0.05")
+        if not drift_ok:
+            mismatches.append(
+                Mismatch(
+                    field="cash_vs_fill_ledger",
+                    expected=str(reconstructed),
+                    observed=str(cash),
+                    difference=str(drift),
+                    severity="critical",
+                )
+            )
 
     # Equity invariant: cash + marked positions ≈ equity (tolerance).
     marked = sum(
@@ -193,16 +228,27 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
                 )
             )
 
-    healthy = cash_ok and positions_ok and drift_ok and not mismatches
+    # Halt only on critical invariant breaks (cash/positions/fill qty/drift when complete).
+    healthy = (
+        cash_ok
+        and positions_ok
+        and drift_ok
+        and not any(m.severity == "critical" for m in mismatches)
+    )
     detail = "ok"
     if not healthy:
-        detail = mismatches[0].field if mismatches else "reconciliation_failed"
+        detail = next(
+            (m.field for m in mismatches if m.severity == "critical"),
+            mismatches[0].field if mismatches else "reconciliation_failed",
+        )
         if not cash_ok:
             detail = "negative cash"
         elif not positions_ok:
             detail = "invalid position or fill state"
         elif not drift_ok:
             detail = f"cash drift {drift} vs fill ledger"
+    elif mismatches:
+        detail = "ok_with_warnings"
 
     result = ReconciliationResult(
         healthy=healthy,

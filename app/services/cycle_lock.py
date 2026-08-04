@@ -187,12 +187,16 @@ async def recent_scheduler_runs(
     session: AsyncSession, *, limit: int = 20
 ) -> list[dict[str, Any]]:
     rows = (
-        await session.execute(
-            select(SchedulerRunORM)
-            .order_by(SchedulerRunORM.started_at.desc())
-            .limit(limit)
+        (
+            await session.execute(
+                select(SchedulerRunORM)
+                .order_by(SchedulerRunORM.started_at.desc())
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         {
             "id": r.id,

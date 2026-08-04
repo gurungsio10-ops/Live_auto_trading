@@ -60,7 +60,9 @@ async def test_cycle_lock_acquire_and_hold():
         assert second.status == LockStatus.HELD
     async with factory() as session:
         await release_cycle_lock(
-            session, lock_key=key, owner=first.lock.owner  # type: ignore[union-attr]
+            session,
+            lock_key=key,
+            owner=first.lock.owner,  # type: ignore[union-attr]
         )
         third = await acquire_cycle_lock(session, lock_key=key, ttl_seconds=60)
         assert third.status == LockStatus.ACQUIRED
@@ -82,15 +84,28 @@ async def test_trading_enabled_lives_on_paper_session():
 
 @pytest.mark.asyncio
 async def test_idempotent_cycle_no_duplicate_orders():
+    from app.services.sample_market import build_ema_crossover_candles
+
     reset_paper_session()
+    candles = build_ema_crossover_candles(force_buy_on_last=True)
+    source = paper_cycle.ProvidedCandleSource(candles=candles)
     first = await paper_cycle.run_paper_trading_cycle(
-        symbol="BTC/USDT", timeframe="1m", strategy_id="ema_crossover"
+        symbol="BTC/USDT",
+        timeframe="1m",
+        strategy_id="ema_crossover",
+        candle_source=source,
     )
     second = await paper_cycle.run_paper_trading_cycle(
-        symbol="BTC/USDT", timeframe="1m", strategy_id="ema_crossover"
+        symbol="BTC/USDT",
+        timeframe="1m",
+        strategy_id="ema_crossover",
+        candle_source=source,
     )
     assert second.idempotent_replay is True
     assert second.order_id is None or second.order_id == first.order_id
+    assert len(get_paper_session().paper.state.fills) == len(
+        {f.id for f in get_paper_session().paper.state.fills}
+    )
 
 
 @pytest.mark.asyncio

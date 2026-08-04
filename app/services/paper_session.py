@@ -1085,6 +1085,13 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
     except Exception:
         # Older DBs without journal tables still boot from checkpoint.
         pass
+
+    # Fallback: restore fills from checkpoint so restart recon stays coherent
+    # when journal rows were never written (offline cycle without JournalStore).
+    if not paper.paper.state.fills and checkpoint:
+        restored_fills = store.checkpoint_to_fills(checkpoint)
+        if restored_fills:
+            paper.paper.state.fills = list(restored_fills)
     return paper
 
 
@@ -1109,6 +1116,7 @@ async def persist_paper_session(
         idempotency_index=dict(paper.paper.state.idempotency_index),
         fees_paid=fees,
         correlation_id=correlation_id,
+        fills=list(paper.paper.state.fills),
     )
 
 
@@ -1117,6 +1125,7 @@ async def bootstrap_paper_runtime() -> None:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from app.db.base import Base, create_engine
+    from app.services import cycle_lock as _cycle_lock_models  # noqa: F401
     from app.services import paper_cycle
 
     engine = create_engine()
