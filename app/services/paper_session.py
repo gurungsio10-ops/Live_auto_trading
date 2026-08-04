@@ -1176,13 +1176,22 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
 async def persist_paper_session(
     session: Any, *, correlation_id: str | None = None
 ) -> None:
-    """Write kill switch + portfolio + risk/strategy durable state."""
+    """Write kill switch + portfolio + risk/strategy durable state atomically.
+
+    Stages all dual-writes in one transaction and commits once. Callers must
+    treat exceptions as fail-closed (do not continue trading with divergent
+    memory vs DB state).
+    """
     from app.services import paper_persistence as store
 
     paper = get_paper_session()
-    await store.save_kill_switch(session, enabled=paper.kill_switch_enabled)
-    await store.save_trading_enabled(session, enabled=paper.trading_enabled)
-    await store.save_trading_paused(session, paused=paper.trading_paused)
+    await store.save_kill_switch(
+        session, enabled=paper.kill_switch_enabled, commit=False
+    )
+    await store.save_trading_enabled(
+        session, enabled=paper.trading_enabled, commit=False
+    )
+    await store.save_trading_paused(session, paused=paper.trading_paused, commit=False)
     fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
     equity = paper.paper.state.cash + sum(
         (p.quantity * p.current_price for p in paper.paper.state.positions.values()),
@@ -1206,6 +1215,7 @@ async def persist_paper_session(
         correlation_id=correlation_id,
         fills=list(paper.paper.state.fills),
         orders=dict(paper.paper.state.orders),
+        commit=False,
     )
     await store.save_paper_account(
         session,
@@ -1216,6 +1226,7 @@ async def persist_paper_session(
         consecutive_losses=paper._consecutive_losses,
         fees_paid=fees,
         idempotency_index=dict(paper.paper.state.idempotency_index),
+        commit=False,
     )
     rs = paper.risk_engine.state
     await store.save_risk_state(
@@ -1231,19 +1242,23 @@ async def persist_paper_session(
         daily_start_equity=paper._daily_start_equity,
         consecutive_losses=paper._consecutive_losses,
         kill_switch_enabled=paper.kill_switch_enabled,
+        commit=False,
     )
     await store.save_strategy_state(
         session,
         selected_strategy_id=paper.selected_strategy_id,
         running_strategies=list(paper.running_strategies),
         param_overrides=dict(paper.param_overrides),
+        commit=False,
     )
     await store.save_equity_snapshot(
         session,
         equity=equity,
         cash=paper.paper.state.cash,
         drawdown=drawdown,
+        commit=False,
     )
+    await session.commit()
 
 
 async def bootstrap_paper_runtime() -> None:

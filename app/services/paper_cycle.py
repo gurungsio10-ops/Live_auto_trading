@@ -213,6 +213,22 @@ def reset_cycle_state() -> None:
     _LAST_SIGNAL = None
 
 
+def _fail_closed_persistence(*, reason: str) -> None:
+    """Halt new trading when durable writes or recon cannot be completed."""
+    try:
+        from app.services.paper_session import get_paper_session
+        from app.services.reconciliation import apply_halt_from_storage
+
+        session = get_paper_session()
+        session.trading_paused = True
+        session.risk_engine.state.database_healthy = False
+        session.risk_engine.state.reconciliation_healthy = False
+        apply_halt_from_storage(halted=True)
+        logger.error("paper_cycle_fail_closed", extra={"reason": reason})
+    except Exception:
+        logger.error("paper_cycle_fail_closed_apply_failed", extra={"reason": reason})
+
+
 def last_cycle_result() -> CycleResult | None:
     return _LAST_CYCLE
 
@@ -574,7 +590,8 @@ async def _run_paper_trading_cycle_inner(
                 "lock_status": lock_status,
             },
         )
-        # Best-effort durable persistence (cycle keys + portfolio checkpoint).
+        # Durable persistence — fail closed on write failure so memory and DB
+        # cannot silently diverge while trading continues.
         try:
             from app.db.base import session_scope
             from app.services import paper_persistence as store
@@ -643,21 +660,33 @@ async def _run_paper_trading_cycle_inner(
                         "lock_status": lock_status,
                     },
                 )
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            logger.error(
                 "paper_cycle_persist_failed",
-                extra={"correlation_id": correlation_id},
+                extra={
+                    "correlation_id": correlation_id,
+                    "error": type(exc).__name__,
+                },
+            )
+            _fail_closed_persistence(
+                reason=f"cycle persistence failed: {type(exc).__name__}"
             )
 
-        # Post-cycle reconciliation (fail-closed on mismatch).
+        # Post-cycle reconciliation (fail-closed on mismatch / exception).
         try:
             from app.services.reconciliation import run_paper_reconciliation
 
             await run_paper_reconciliation(persist=True)
-        except Exception:
-            logger.warning(
+        except Exception as exc:
+            logger.error(
                 "paper_cycle_reconciliation_failed",
-                extra={"correlation_id": correlation_id},
+                extra={
+                    "correlation_id": correlation_id,
+                    "error": type(exc).__name__,
+                },
+            )
+            _fail_closed_persistence(
+                reason=f"post-cycle reconciliation failed: {type(exc).__name__}"
             )
         return result
     finally:

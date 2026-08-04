@@ -69,7 +69,11 @@ async def get_system_value(session: AsyncSession, key: str) -> dict[str, Any] | 
 
 
 async def set_system_value(
-    session: AsyncSession, key: str, value: dict[str, Any]
+    session: AsyncSession,
+    key: str,
+    value: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> None:
     row = await session.get(SystemStateORM, key)
     now = utc_now()
@@ -78,11 +82,16 @@ async def set_system_value(
     else:
         row.value = value
         row.updated_at = now
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def save_kill_switch(
-    session: AsyncSession, *, enabled: bool, reason: str = ""
+    session: AsyncSession,
+    *,
+    enabled: bool,
+    reason: str = "",
+    commit: bool = True,
 ) -> None:
     await set_system_value(
         session,
@@ -92,6 +101,7 @@ async def save_kill_switch(
             "updated_at": utc_now().isoformat(),
             "reason": reason,
         },
+        commit=commit,
     )
 
 
@@ -121,11 +131,14 @@ async def load_kill_switch(session: AsyncSession) -> bool | None:
     return bool(value.get("enabled"))
 
 
-async def save_trading_enabled(session: AsyncSession, *, enabled: bool) -> None:
+async def save_trading_enabled(
+    session: AsyncSession, *, enabled: bool, commit: bool = True
+) -> None:
     await set_system_value(
         session,
         KEY_TRADING_ENABLED,
         {"enabled": enabled, "updated_at": utc_now().isoformat()},
+        commit=commit,
     )
 
 
@@ -136,11 +149,14 @@ async def load_trading_enabled(session: AsyncSession) -> bool | None:
     return bool(value.get("enabled"))
 
 
-async def save_trading_paused(session: AsyncSession, *, paused: bool) -> None:
+async def save_trading_paused(
+    session: AsyncSession, *, paused: bool, commit: bool = True
+) -> None:
     await set_system_value(
         session,
         KEY_TRADING_PAUSED,
         {"paused": paused, "updated_at": utc_now().isoformat()},
+        commit=commit,
     )
 
 
@@ -152,7 +168,11 @@ async def load_trading_paused(session: AsyncSession) -> bool | None:
 
 
 async def save_reconciliation_halt(
-    session: AsyncSession, *, halted: bool, detail: str = ""
+    session: AsyncSession,
+    *,
+    halted: bool,
+    detail: str = "",
+    commit: bool = True,
 ) -> None:
     await set_system_value(
         session,
@@ -162,6 +182,7 @@ async def save_reconciliation_halt(
             "detail": detail,
             "updated_at": utc_now().isoformat(),
         },
+        commit=commit,
     )
 
 
@@ -174,6 +195,7 @@ async def save_cycle_keys(
     keys: set[tuple[str, str, str, str]],
     *,
     account_id: str = DEFAULT_ACCOUNT_ID,
+    commit: bool = True,
 ) -> None:
     """Persist processed cycle keys (system_state + normalized table)."""
     now = utc_now()
@@ -181,7 +203,7 @@ async def save_cycle_keys(
         "keys": [list(k) for k in sorted(keys)],
         "updated_at": now.isoformat(),
     }
-    await set_system_value(session, KEY_CYCLE_KEYS, payload)
+    await set_system_value(session, KEY_CYCLE_KEYS, payload, commit=False)
 
     # Dual-write normalized uniqueness table (idempotent upserts).
     for symbol, version, timeframe, open_iso in keys:
@@ -212,7 +234,8 @@ async def save_cycle_keys(
                     created_at=now,
                 )
             )
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def load_cycle_keys(session: AsyncSession) -> set[tuple[str, str, str, str]]:
@@ -252,6 +275,7 @@ async def save_paper_checkpoint(
     correlation_id: str | None = None,
     fills: list[Any] | None = None,
     orders: list[Any] | dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> None:
     now = utc_now()
     # Upsert USDT balance
@@ -359,8 +383,10 @@ async def save_paper_checkpoint(
             "orders": _serialize_orders(orders),
             "updated_at": now.isoformat(),
         },
+        commit=False,
     )
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 def _serialize_orders(
@@ -573,6 +599,7 @@ async def save_paper_account(
     fees_paid: Decimal,
     reserved_capital: Decimal = Decimal("0"),
     idempotency_index: dict[str, str] | None = None,
+    commit: bool = True,
 ) -> None:
     now = utc_now()
     row = await session.get(PaperAccountORM, account_id)
@@ -601,7 +628,8 @@ async def save_paper_account(
         row.reserved_capital = reserved_capital
         row.idempotency_index = dict(idempotency_index or {})
         row.updated_at = now
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def load_paper_account(
@@ -640,6 +668,7 @@ async def save_risk_state(
     consecutive_losses: int = 0,
     kill_switch_enabled: bool = False,
     halt_reason: str = "",
+    commit: bool = True,
 ) -> None:
     now = utc_now()
     keys = list(seen_idempotency_keys or [])
@@ -680,7 +709,8 @@ async def save_risk_state(
         row.kill_switch_enabled = _bool_str(kill_switch_enabled)
         row.halt_reason = halt_reason or ""
         row.updated_at = now
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def load_risk_state(
@@ -714,6 +744,7 @@ async def save_strategy_state(
     selected_strategy_id: str | None,
     running_strategies: list[str] | None = None,
     param_overrides: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> None:
     now = utc_now()
     row = await session.get(StrategyStateORM, account_id)
@@ -732,7 +763,8 @@ async def save_strategy_state(
         row.running_strategies = list(running_strategies or [])
         row.param_overrides = dict(param_overrides or {})
         row.updated_at = now
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def load_strategy_state(
@@ -757,6 +789,7 @@ async def save_equity_snapshot(
     equity: Decimal,
     cash: Decimal,
     drawdown: Decimal,
+    commit: bool = True,
 ) -> None:
     session.add(
         EquitySnapshotORM(
@@ -768,7 +801,8 @@ async def save_equity_snapshot(
             created_at=utc_now(),
         )
     )
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 async def save_strategy_run(
