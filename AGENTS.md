@@ -36,8 +36,10 @@ The dashboard is now backed by **live root-level backend endpoints** in `app/api
 Key behaviours to know:
 - `PaperSession` is process-local but **hydrated from PostgreSQL/SQLite on startup** (`bootstrap_paper_runtime`): kill switch, trading flags, recon halt, checkpoint + `paper_accounts` / `risk_state` / `strategy_state`, cycle keys, journal (or checkpoint) orders/fills. A restart must not wipe the paper account unless `POST /api/paper/reset` is called with admin auth + `RESET_PAPER_ACCOUNT`.
 - After `alembic upgrade head`, revision **`0006_paper_durable`** must be applied for first-class durable tables. Dual-write keeps legacy `system_state` keys for back-compat.
-- Startup reconciliation is **fail-closed**: exceptions pause trading and persist a halt. Clear with `POST /api/v1/reconciliation/clear-halt` (not memory-only `clear_reconciliation_halt()`). Status: `GET /api/v1/recovery/status`.
+- Startup reconciliation is **fail-closed**: exceptions pause trading and persist a halt. Clear with `POST /api/v1/reconciliation/clear-halt` (admin token; not memory-only `clear_reconciliation_halt()`). Status: `GET /api/v1/recovery/status`.
+- `persist_paper_session` stages dual-writes and **commits once**. Cycle persist/recon write failures call `_fail_closed_persistence` (pause + `database_healthy=false` + recon halt) so trading does not continue with divergent memory vs DB.
 - `run_paper_trading_cycle` auto-attaches `JournalStore` when `journal` is omitted **except** for `:memory:` SQLite (pytest isolation). Production/file/Postgres paths get durable order/fill ledger writes.
+- Authoritative merge tip for paper durability is PR **#26**; PRs #21–#25 are superseded ancestors (see `docs/audit/pr26_consolidation_report.md`).
 - **Every order still routes through the risk engine** (`OrderGateway` → `app/risk/engine.py`) before the paper engine — nothing bypasses risk checks.
 - Canonical cycle path: `run_paper_trading_cycle` with DB cycle locks (`cycle_locks`), journal attachment, post-cycle reconciliation, and fail-closed readiness when reconciliation is unhealthy. See `docs/operations/recovery_runbook.md`.
 - Shared DB pool: use `app.db.base.session_scope` / `get_shared_engine` (not per-request `create_engine().dispose()`). `CYCLE_LOCK_FAIL_CLOSED=true` rejects cycles when the lock layer is unavailable.
