@@ -5,7 +5,7 @@
 Project Atlas is a gated **paper/live crypto trading system** with two services in one repo:
 
 - **Backend** — FastAPI (Python `>=3.11`, runs on 3.12 here). Package config in `pyproject.toml`.
-- **Frontend** — `frontend/` Next.js 14 + TypeScript + Tailwind "Atlas Terminal" ops dashboard.
+- **Frontend** — `frontend/` Next.js 14 + TypeScript + Tailwind paper-trading dashboard (premium dark fintech UI). Route map and design tokens are in `frontend/README.md` and `docs/ui/UX_GUIDELINES.md`.
 
 Standard commands are already documented in `README.md` and `frontend/README.md`; the notes below are only the non-obvious caveats discovered while setting up the environment.
 
@@ -21,7 +21,8 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 ### Test / lint
 
 - Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
-- Frontend: `npm --prefix frontend run lint`, `npm run typecheck`, `npm run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`).
+- Frontend: `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`). No dedicated frontend unit-test script yet.
+- Tailwind gotcha: use `text-foreground` / `text-brand` for copy colours — `text-primary` clashes with the primary button colour scale.
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
 
