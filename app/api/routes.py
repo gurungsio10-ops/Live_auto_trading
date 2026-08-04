@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter
@@ -18,8 +17,6 @@ from app.strategies.registry import list_strategies
 router = APIRouter()
 _monitoring = MonitoringService(HealthRegistry())
 _analyst = TradingAnalyst()
-_paper_paused = False
-_kill_switch_override: bool | None = None
 
 
 class KillSwitchBody(BaseModel):
@@ -39,22 +36,40 @@ async def readiness() -> dict:
 
 @router.get("/portfolio/summary")
 async def portfolio_summary() -> dict:
+    """Delegate to the live PaperSession (not static placeholders)."""
+    from app.services.paper_session import get_paper_session
+
+    summary = get_paper_session().portfolio_summary()
     settings = get_settings()
-    return {
-        "cash_balance": "10000",
-        "equity": "10000",
-        "realized_pnl": "0",
-        "unrealized_pnl": "0",
-        "daily_pnl": "0",
-        "drawdown": "0",
-        "trading_mode": settings.trading_mode,
-        "kill_switch_enabled": (
-            settings.kill_switch_enabled
-            if _kill_switch_override is None
-            else _kill_switch_override
-        ),
-        "paused": _paper_paused,
-    }
+    summary["runtime_mode"] = settings.runtime_mode.value
+    summary["simulated"] = True
+    return summary
+
+
+@router.get("/equity-curve")
+async def equity_curve() -> list[dict]:
+    from app.services.paper_session import get_paper_session
+
+    return get_paper_session().equity_points()
+
+
+@router.post("/controls/kill-switch")
+async def kill_switch(body: KillSwitchBody) -> dict:
+    from app.services.paper_session import get_paper_session
+
+    result = get_paper_session().set_kill_switch(body.enabled)
+    if body.enabled:
+        await _monitoring.alert(
+            "KILL_SWITCH_ACTIVATED", "Kill switch activated via API"
+        )
+    return result
+
+
+@router.post("/controls/pause")
+async def pause_trading(paused: bool = True) -> dict:
+    from app.services.paper_session import get_paper_session
+
+    return get_paper_session().set_paused(paused)
 
 
 @router.get("/strategies")
@@ -68,24 +83,6 @@ async def strategies() -> list[dict]:
         }
         for s in list_strategies()
     ]
-
-
-@router.post("/controls/kill-switch")
-async def kill_switch(body: KillSwitchBody) -> dict:
-    global _kill_switch_override
-    _kill_switch_override = body.enabled
-    if body.enabled:
-        await _monitoring.alert(
-            "KILL_SWITCH_ACTIVATED", "Kill switch activated via API"
-        )
-    return {"kill_switch_enabled": body.enabled}
-
-
-@router.post("/controls/pause")
-async def pause_trading(paused: bool = True) -> dict:
-    global _paper_paused
-    _paper_paused = paused
-    return {"paused": _paper_paused}
 
 
 @router.post("/controls/strategy")
@@ -105,6 +102,7 @@ async def risk_settings() -> dict:
     safe = redact_settings(settings)
     return {
         "trading_mode": safe["trading_mode"],
+        "runtime_mode": settings.runtime_mode.value,
         "live_trading_enabled": safe["live_trading_enabled"],
         "kill_switch_enabled": safe["kill_switch_enabled"],
         "exchange_env": safe["exchange_env"],
@@ -136,12 +134,3 @@ async def ai_explain_trade(record: dict[str, Any]) -> dict:
 @router.post("/ai/summarize-session")
 async def ai_summarize(events: list[dict[str, Any]]) -> dict:
     return _analyst.summarize_session(events).to_api_dict()
-
-
-@router.get("/equity-curve")
-async def equity_curve() -> list[dict]:
-    # Placeholder series for dashboard wiring
-    return [
-        {"t": f"2024-01-0{i + 1}", "equity": str(Decimal("10000") + i * 10)}
-        for i in range(5)
-    ]

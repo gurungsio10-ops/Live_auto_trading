@@ -110,6 +110,7 @@ class PaperSession:
         self.equity_curve: list[dict[str, str]] = []
         self.backtest_reports: list[dict[str, Any]] = []
 
+        self._persist_task: Any = None
         self._record_equity_point()
 
     # ------------------------------------------------------------------ market
@@ -472,6 +473,7 @@ class PaperSession:
                 "open_position_count": len(state.open_positions),
                 "consecutive_losses": state.consecutive_losses,
                 "trading_mode": self.settings.trading_mode,
+                "runtime_mode": self.settings.runtime_mode.value,
                 "kill_switch_enabled": self.kill_switch_enabled,
                 "trading_paused": self.trading_paused,
                 "exchange_env": self.settings.exchange_env,
@@ -605,6 +607,44 @@ class PaperSession:
                         "order_id": None,
                     },
                 )
+            # Best-effort durable persist (sync wrapper for async store).
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_kill_switch(session, enabled=enabled)
+                            await store.append_audit_event(
+                                session,
+                                event_type="KILL_SWITCH",
+                                message=(
+                                    "Kill switch activated"
+                                    if enabled
+                                    else "Kill switch deactivated"
+                                ),
+                                severity="critical" if enabled else "info",
+                                payload={"enabled": enabled},
+                            )
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
             return {"kill_switch_enabled": enabled}
 
     def set_paused(self, paused: bool) -> dict[str, Any]:
@@ -885,3 +925,89 @@ def reset_paper_session() -> PaperSession:
     global _SESSION
     _SESSION = PaperSession()
     return _SESSION
+
+
+async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
+    """Load durable kill-switch + portfolio checkpoint into the process session."""
+    from app.services import paper_persistence as store
+
+    paper = get_paper_session()
+    kill = await store.load_kill_switch(session)
+    if kill is not None:
+        paper.kill_switch_enabled = kill
+
+    checkpoint = await store.load_paper_checkpoint(session)
+    if checkpoint:
+        cash = Decimal(str(checkpoint.get("cash", paper.paper.state.cash)))
+        paper.paper.state.cash = cash
+        paper._peak_equity = Decimal(
+            str(checkpoint.get("peak_equity", paper._peak_equity))
+        )
+        paper._consecutive_losses = int(checkpoint.get("consecutive_losses") or 0)
+        paper.paper.state.realized_pnl = Decimal(
+            str(checkpoint.get("realized_pnl") or "0")
+        )
+        paper.paper.state.positions = store.checkpoint_to_positions(checkpoint)
+        idx = checkpoint.get("idempotency_index") or {}
+        if isinstance(idx, dict):
+            paper.paper.state.idempotency_index = {
+                str(k): str(v) for k, v in idx.items()
+            }
+        for symbol, pos in paper.paper.state.positions.items():
+            paper.paper.set_mark_price(symbol, pos.current_price)
+        paper._record_equity_point()
+    return paper
+
+
+async def persist_paper_session(
+    session: Any, *, correlation_id: str | None = None
+) -> None:
+    """Write kill switch + portfolio checkpoint to the database."""
+    from app.services import paper_persistence as store
+
+    paper = get_paper_session()
+    await store.save_kill_switch(session, enabled=paper.kill_switch_enabled)
+    fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
+    await store.save_paper_checkpoint(
+        session,
+        cash=paper.paper.state.cash,
+        positions=dict(paper.paper.state.positions),
+        realized_pnl=paper.paper.state.realized_pnl,
+        peak_equity=paper._peak_equity,
+        consecutive_losses=paper._consecutive_losses,
+        idempotency_index=dict(paper.paper.state.idempotency_index),
+        fees_paid=fees,
+        correlation_id=correlation_id,
+    )
+
+
+async def bootstrap_paper_runtime() -> None:
+    """Startup: open DB session and hydrate paper state (best-effort)."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.db.base import Base, create_engine
+    from app.services import paper_cycle
+
+    engine = create_engine()
+    try:
+        async with engine.begin() as conn:
+            # Dev/sqlite safety: create missing tables if migrations not run yet.
+            # Production should use ``alembic upgrade head``.
+            await conn.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as session:
+            await hydrate_paper_session_from_db(session)
+            keys = await paper_cycle.load_persisted_cycle_keys(session)
+            paper_cycle.set_processed_cycle_keys(keys)
+    except Exception:
+        # Paper trading can still run in-memory if DB is unavailable.
+        from app.core.logging import get_logger
+
+        get_logger("paper.bootstrap").warning(
+            "paper_bootstrap_failed",
+            extra={"detail": "continuing with in-memory paper session"},
+        )
+    finally:
+        await engine.dispose()

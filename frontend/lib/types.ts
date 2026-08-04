@@ -1,7 +1,8 @@
 /** Domain types mirroring Project Atlas backend concepts. */
 
 export type TradingMode = "paper" | "live";
-export type ExchangeEnv = "paper" | "testnet" | "live";
+export type ExchangeEnv = "paper" | "testnet" | "live" | "backtest";
+export type RuntimeMode = "BACKTEST" | "PAPER" | "TESTNET" | "LIVE";
 
 export type SignalDirection = "buy" | "sell" | "hold" | "exit";
 export type OrderSide = "buy" | "sell";
@@ -84,6 +85,7 @@ export interface PortfolioSummary {
   open_position_count: number;
   consecutive_losses: number;
   trading_mode: TradingMode;
+  runtime_mode?: RuntimeMode | string;
   kill_switch_enabled: boolean;
   trading_paused: boolean;
   exchange_env: ExchangeEnv;

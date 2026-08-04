@@ -87,13 +87,30 @@ async def system_status() -> SystemHealth:
     settings = get_settings()
     session = get_paper_session()
     kill = session.kill_switch_enabled or settings.kill_switch_enabled
+    db_ok = True
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.db.base import create_engine
+
+        engine = create_engine()
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as db:
+            await db.execute(text("SELECT 1"))
+        await engine.dispose()
+    except Exception:
+        db_ok = False
     return SystemHealth(
         status="halted" if kill else "ok",
         trading_mode=settings.trading_mode,
+        runtime_mode=settings.runtime_mode.value,
         kill_switch_enabled=kill,
         live_trading_enabled=settings.live_trading_enabled,
         exchange_env=settings.exchange_env,
-        database_ok=True,
+        database_ok=db_ok,
         market_data_ok=True,
         risk_engine_ok=True,
         detail="paper trading vertical slice",

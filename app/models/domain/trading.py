@@ -202,6 +202,7 @@ class SystemHealth(BaseModel):
 
     status: str
     trading_mode: str
+    runtime_mode: str = "PAPER"
     kill_switch_enabled: bool
     live_trading_enabled: bool
     exchange_env: str

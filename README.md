@@ -15,11 +15,12 @@ Key packages: `app/market_data`, `app/strategies`, `app/risk`, `app/execution`, 
 
 Docs:
 
-- `docs/architecture/current_state_audit.md`
+- `docs/CURRENT_STATE_AUDIT.md` — verified audit (prefer over older status %)
+- `docs/PAPER_TRADING_RUNBOOK.md` — start/stop/cycle/kill-switch/reset
+- `docs/IMPLEMENTATION_REPORT.md` — this hardening pass
+- `docs/ROADMAP.md`
 - `docs/architecture/paper_trading_flow.md`
 - `docs/architecture/risk_controls.md`
-- `docs/architecture/database_schema.md`
-- `docs/operations/runbook.md`
 - `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
 
 ## Local setup
@@ -28,7 +29,7 @@ Docs:
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# Keep TRADING_MODE=paper. Set ADMIN_API_TOKEN for kill-switch / paper reset.
+# Keep ATLAS_RUNTIME_MODE=PAPER / TRADING_MODE=paper / ENABLE_LIVE_TRADING=false
 alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -36,10 +37,19 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 Dashboard:
 
 ```bash
-cd frontend && npm install
+cd frontend && npm ci
 ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
+One paper cycle:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m"}'
+```
+
+See `docs/PAPER_TRADING_RUNBOOK.md` for pause, kill switch, reset, and restart behaviour.
 ## Docker setup
 
 ```bash

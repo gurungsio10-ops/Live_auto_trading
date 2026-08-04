@@ -105,6 +105,35 @@ _STRATEGY_RUNS: list[StrategyRun] = []
 _PROCESSED_CYCLE_KEYS: set[tuple[str, str, str, datetime]] = set()
 
 
+def set_processed_cycle_keys(keys: set[tuple[str, str, str, str]]) -> None:
+    """Hydrate idempotency keys from durable storage (ISO open_time strings)."""
+    global _PROCESSED_CYCLE_KEYS
+    out: set[tuple[str, str, str, datetime]] = set()
+    for symbol, version, timeframe, open_iso in keys:
+        out.add(
+            (symbol, version, timeframe, ensure_utc(datetime.fromisoformat(open_iso)))
+        )
+    _PROCESSED_CYCLE_KEYS = out
+
+
+def export_processed_cycle_keys() -> set[tuple[str, str, str, str]]:
+    return {
+        (s, v, tf, ensure_utc(ts).isoformat()) for s, v, tf, ts in _PROCESSED_CYCLE_KEYS
+    }
+
+
+async def load_persisted_cycle_keys(session: Any) -> set[tuple[str, str, str, str]]:
+    from app.services import paper_persistence as store
+
+    return await store.load_cycle_keys(session)
+
+
+async def persist_cycle_keys(session: Any) -> None:
+    from app.services import paper_persistence as store
+
+    await store.save_cycle_keys(session, export_processed_cycle_keys())
+
+
 def _session_key(symbol: str, strategy_id: str) -> str:
     return f"{strategy_id}:{symbol}"
 
@@ -333,6 +362,61 @@ async def run_paper_trading_cycle(
             "risk_decision": result.risk_decision,
         },
     )
+    # Best-effort durable persistence (cycle keys + portfolio checkpoint).
+    try:
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.db.base import create_engine
+        from app.services import paper_persistence as store
+        from app.services.paper_session import get_paper_session, persist_paper_session
+
+        engine = create_engine()
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as session:
+            await persist_cycle_keys(session)
+            session_paper = get_paper_session()
+            # Prefer shared PaperSession engine; otherwise checkpoint orchestrator state.
+            if orch.paper is session_paper.paper:
+                await persist_paper_session(session, correlation_id=correlation_id)
+            else:
+                equity = orch.paper.state.cash + sum(
+                    p.quantity * p.current_price
+                    for p in orch.paper.state.positions.values()
+                )
+                await store.save_paper_checkpoint(
+                    session,
+                    cash=orch.paper.state.cash,
+                    positions=dict(orch.paper.state.positions),
+                    realized_pnl=orch.paper.state.realized_pnl,
+                    peak_equity=max(equity, orch.paper.state.cash),
+                    consecutive_losses=0,
+                    idempotency_index=dict(orch.paper.state.idempotency_index),
+                    correlation_id=correlation_id,
+                )
+            await store.append_audit_event(
+                session,
+                event_type="PAPER_CYCLE",
+                message=(
+                    f"{result.signal_direction} {result.order_status or ''}".strip()
+                ),
+                correlation_id=correlation_id,
+                order_id=result.order_id,
+                payload={
+                    "signal_direction": result.signal_direction,
+                    "order_status": result.order_status,
+                    "risk_decision": result.risk_decision,
+                    "risk_reason_code": result.risk_reason_code,
+                    "idempotent_replay": result.idempotent_replay,
+                },
+            )
+        await engine.dispose()
+    except Exception:
+        logger.warning(
+            "paper_cycle_persist_failed",
+            extra={"correlation_id": correlation_id},
+        )
     return result
 
 

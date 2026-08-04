@@ -17,12 +17,14 @@ from app.core.config import get_settings
 from app.core.errors import AtlasError, ConfigurationError, LiveTradingDisabledError
 from app.core.logging import configure_logging
 from app.core.security import redact_settings
+from app.services.paper_session import bootstrap_paper_runtime, get_paper_session
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     settings.assert_startup_safe()
+    await bootstrap_paper_runtime()
     yield
 
 
@@ -31,7 +33,7 @@ configure_logging(settings.log_level)
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "Project Atlas — personal cryptocurrency paper trading platform. "
         "AI is advisory only. Every order passes through the central risk engine. "
@@ -66,24 +68,40 @@ async def atlas_error_handler(_request: Request, exc: AtlasError) -> JSONRespons
 
 
 @app.get("/health")
+@app.get("/health/live")
 async def health() -> dict[str, Any]:
+    s = get_settings()
+    session = get_paper_session()
     return {
         "status": "ok",
-        "trading_mode": settings.trading_mode,
-        "live_trading_enabled": settings.live_trading_enabled,
-        "kill_switch_enabled": settings.kill_switch_enabled,
-        "exchange_env": settings.exchange_env,
+        "trading_mode": s.trading_mode,
+        "runtime_mode": s.runtime_mode.value,
+        "live_trading_enabled": s.live_trading_enabled,
+        "kill_switch_enabled": session.kill_switch_enabled or s.kill_switch_enabled,
+        "exchange_env": s.exchange_env,
     }
 
 
 @app.get("/ready")
+@app.get("/health/ready")
 async def ready() -> dict[str, Any]:
-    if settings.trading_mode != "paper":
-        return {"status": "not_ready", "reason": "trading_mode is not paper"}
-    return {"status": "ready", "trading_mode": settings.trading_mode}
+    s = get_settings()
+    if s.runtime_mode.value == "LIVE" or s.trading_mode != "paper":
+        return {
+            "status": "not_ready",
+            "reason": "runtime is not PAPER (live blocked)",
+            "runtime_mode": s.runtime_mode.value,
+        }
+    return {
+        "status": "ready",
+        "trading_mode": s.trading_mode,
+        "runtime_mode": s.runtime_mode.value,
+    }
 
 
 @app.get("/config/safe")
 async def safe_config() -> dict[str, Any]:
     """Return redacted settings suitable for debugging."""
-    return redact_settings(settings)
+    payload = redact_settings(settings)
+    payload["runtime_mode"] = get_settings().runtime_mode.value
+    return payload

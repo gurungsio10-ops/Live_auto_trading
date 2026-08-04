@@ -218,6 +218,19 @@ class RiskEngine:
                 RiskReasonCode.MAX_ORDER_FREQUENCY, "Order frequency exceeded", checks
             )
 
+        # Trading cooldown (seconds since last accepted order timestamp).
+        cooldown = int(getattr(self.settings, "order_cooldown_seconds", 0) or 0)
+        if cooldown > 0 and self.state.recent_order_times:
+            last = ensure_utc(max(self.state.recent_order_times))
+            elapsed = (now - last).total_seconds()
+            checks["cooldown_elapsed_seconds"] = elapsed
+            if elapsed < cooldown:
+                return self._reject(
+                    RiskReasonCode.ORDER_COOLDOWN,
+                    f"Order cooldown active ({elapsed:.1f}s < {cooldown}s)",
+                    checks,
+                )
+
         portfolio = context.portfolio
 
         # Daily loss / drawdown / consecutive losses
@@ -353,6 +366,18 @@ class RiskEngine:
             return self._reject(
                 RiskReasonCode.INVALID_QUANTITY, "Approved qty is zero", checks
             )
+
+        # Cash check against final approved size (after reductions).
+        if request.side == OrderSide.BUY and not request.reduce_only:
+            estimated_cost = approved_qty * price
+            checks["estimated_cost"] = str(estimated_cost)
+            checks["cash_balance"] = str(portfolio.cash_balance)
+            if estimated_cost > portfolio.cash_balance:
+                return self._reject(
+                    RiskReasonCode.INSUFFICIENT_BALANCE,
+                    "Insufficient cash for approved order notional",
+                    checks,
+                )
 
         # Record acceptance bookkeeping
         self.state.seen_idempotency_keys.add(request.idempotency_key)

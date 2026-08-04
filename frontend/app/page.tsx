@@ -176,9 +176,15 @@ export default function OverviewPage() {
       )}
       {portfolio.status === "success" && (
         <>
-          <TradingModeIndicator mode={portfolio.data.trading_mode} />
+          <TradingModeIndicator
+            mode={portfolio.data.trading_mode}
+            runtimeMode={(portfolio.data as { runtime_mode?: string }).runtime_mode}
+            exchangeEnv={portfolio.data.exchange_env}
+          />
           <p className="text-[11px] font-mono text-terminal-dim">
-            PAPER MODE — all fills are simulated. Results do not guarantee future performance.
+            {(portfolio.data as { runtime_mode?: string }).runtime_mode || "PAPER"} MODE —
+            fills are simulated unless Spot Testnet is explicitly configured. Results do
+            not guarantee future performance.
           </p>
           <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
             <Card title="Portfolio summary" subtitle="Balance, equity, and P&L stack">

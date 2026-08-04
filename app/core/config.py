@@ -6,13 +6,14 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.errors import ConfigurationError, LiveTradingDisabledError
+from app.core.runtime_mode import RuntimeMode, derive_runtime_mode
 
 TradingMode = Literal["paper", "live"]
-ExchangeEnv = Literal["paper", "testnet", "live"]
+ExchangeEnv = Literal["paper", "testnet", "live", "backtest"]
 
 
 def _bps_to_rate(bps: Decimal) -> Decimal:
@@ -36,10 +37,20 @@ class Settings(BaseSettings):
 
     # Safety-critical defaults — do not weaken.
     trading_mode: TradingMode = Field(default="paper", validation_alias="TRADING_MODE")
-    live_trading_enabled: bool = False
+    # ENABLE_LIVE_TRADING preferred; LIVE_TRADING_ENABLED accepted for compat.
+    live_trading_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_LIVE_TRADING", "LIVE_TRADING_ENABLED"),
+    )
     kill_switch_enabled: bool = False
     exchange_env: ExchangeEnv = "paper"
     live_approval_token: SecretStr | None = None
+    # Explicit acknowledgement required before any LIVE start attempt.
+    live_startup_ack: str = Field(default="", validation_alias="LIVE_STARTUP_ACK")
+    # Optional unified mode: BACKTEST | PAPER | TESTNET | LIVE
+    atlas_runtime_mode: str | None = Field(
+        default=None, validation_alias="ATLAS_RUNTIME_MODE"
+    )
 
     # Local admin token for mutating system endpoints (kill switch, paper reset).
     admin_api_token: SecretStr | None = Field(
@@ -59,6 +70,9 @@ class Settings(BaseSettings):
 
     market_data_stale_seconds: int = Field(
         default=30, ge=1, validation_alias="MARKET_DATA_STALE_SECONDS"
+    )
+    order_cooldown_seconds: int = Field(
+        default=0, ge=0, validation_alias="ORDER_COOLDOWN_SECONDS"
     )
     webhook_alert_url: str | None = None
 
@@ -98,13 +112,33 @@ class Settings(BaseSettings):
     )
     supported_timeframes: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
 
-    @field_validator("trading_mode")
+    @field_validator("trading_mode", mode="before")
     @classmethod
-    def _normalize_trading_mode(cls, value: str) -> str:
-        normalized = value.lower().strip()
+    def _normalize_trading_mode(cls, value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "paper"
+        normalized = str(value).lower().strip()
+        # Never fall through to live on typos — invalid → paper.
         if normalized not in {"paper", "live"}:
-            raise ValueError("TRADING_MODE must be 'paper' or 'live'")
+            return "paper"
         return normalized
+
+    @field_validator("exchange_env", mode="before")
+    @classmethod
+    def _normalize_exchange_env(cls, value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "paper"
+        normalized = str(value).lower().strip()
+        if normalized not in {"paper", "testnet", "live", "backtest"}:
+            return "paper"
+        return normalized
+
+    @field_validator("atlas_runtime_mode", mode="before")
+    @classmethod
+    def _normalize_runtime_mode_field(cls, value: object) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return str(value).strip().upper()
 
     @field_validator(
         "paper_starting_balance",
@@ -172,31 +206,48 @@ class Settings(BaseSettings):
         """
         Fail closed at application startup.
 
-        Live mode without every explicit gate → ConfigurationError.
-        Live mode with gates → LiveTradingDisabledError (not implemented yet).
+        LIVE remains hard-blocked in this development phase even when
+        ENABLE_LIVE_TRADING, credentials, and LIVE_STARTUP_ACK are set.
         """
-        if self.trading_mode != "live":
-            return
-        token = (
-            self.live_approval_token.get_secret_value()
-            if self.live_approval_token
-            else ""
-        )
-        gates_ok = (
-            self.live_trading_enabled
-            and self.exchange_env in {"testnet", "live"}
-            and self.has_exchange_credentials
-            and bool(token.strip())
-            and not self.kill_switch_enabled
-        )
-        if not gates_ok:
-            raise ConfigurationError(
-                "TRADING_MODE=live rejected: incomplete live-trading gates "
-                "(require LIVE_TRADING_ENABLED, credentials, LIVE_APPROVAL_TOKEN, "
-                "exchange_env testnet|live, and kill switch off)."
+        mode = self.runtime_mode
+        if mode == RuntimeMode.LIVE or self.exchange_env == "live":
+            token = (
+                self.live_approval_token.get_secret_value()
+                if self.live_approval_token
+                else ""
             )
-        raise LiveTradingDisabledError(
-            "Live trading mode is not implemented. Keep TRADING_MODE=paper."
+            ack = (self.live_startup_ack or "").strip()
+            gates_ok = (
+                self.live_trading_enabled
+                and self.has_exchange_credentials
+                and bool(token.strip())
+                and ack == "I_UNDERSTAND_LIVE_TRADING_RISKS"
+                and not self.kill_switch_enabled
+            )
+            if not gates_ok:
+                raise ConfigurationError(
+                    "LIVE mode rejected: require ENABLE_LIVE_TRADING=true, "
+                    "exchange credentials, LIVE_APPROVAL_TOKEN, "
+                    "LIVE_STARTUP_ACK=I_UNDERSTAND_LIVE_TRADING_RISKS, "
+                    "and kill switch off. Default remains PAPER."
+                )
+            raise LiveTradingDisabledError(
+                "LIVE execution is hard-disabled in this development phase. "
+                "Keep ATLAS_RUNTIME_MODE=PAPER (or TESTNET) and "
+                "ENABLE_LIVE_TRADING=false."
+            )
+        if self.trading_mode == "live":
+            raise LiveTradingDisabledError(
+                "TRADING_MODE=live is disabled. Keep TRADING_MODE=paper."
+            )
+
+    @property
+    def runtime_mode(self) -> RuntimeMode:
+        """Effective mode: BACKTEST | PAPER | TESTNET | LIVE."""
+        return derive_runtime_mode(
+            explicit=self.atlas_runtime_mode,
+            trading_mode=self.trading_mode,
+            exchange_env=self.exchange_env,
         )
 
     @property
