@@ -1,13 +1,17 @@
 # Paper V1 Final Verification
 
 **Branch:** `cursor/release-paper-v1-consolidated-e3a2`  
+**Tip SHA:** `9f2bb4e7325bb077d7a760103c0cc878f8275c80`  
+**PR:** https://github.com/gurungsio10-ops/Live_auto_trading/pull/27  
 **Migration head:** `0006_paper_durable`  
-**Scope:** Production-quality **PAPER** trading platform consolidation
+**Scope:** Production-quality **PAPER** trading platform consolidation  
+**GitHub Actions:** green on tip (`backend`, `frontend`, `secret-scan`, `docker-compose-validate`)
 
-## Gate results (local verification)
+## Gate results
 
 | Gate | Status |
 |------|--------|
+| GitHub Actions CI | PASS (run 30945372056) |
 | `pytest -q` | PASS (265 tests) |
 | `pytest --cov=app --cov-fail-under=85` | PASS (**85.08%**) |
 | `ruff check app tests` | PASS |
@@ -19,10 +23,11 @@
 | `npm --prefix frontend run lint` | PASS |
 | `npm --prefix frontend run typecheck` | PASS |
 | `npm --prefix frontend run build` | PASS (`/recovery` route present) |
-| `docker compose config` | PASS (compose v2 binary) |
+| `docker compose config` | PASS |
 | Short soak (`paper-soak --max-cycles 6`) | PASS (`ok: true`, 0 invariant failures) |
 | Security order-path scan | PASS (`tests/unit/test_security_order_paths.py`) |
 | Invariant unit tests | PASS |
+| Hello-world paper BUY + Recovery UI | PASS |
 
 Coverage omits (documented, non-hot-path): `app/ai/*`, `app/execution/exchange/*`, `app/cli.py`, `app/api/mvp.py`, `app/market_data/service.py`, `app/news/*`.
 
