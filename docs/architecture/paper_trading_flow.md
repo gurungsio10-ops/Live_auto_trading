@@ -28,7 +28,17 @@ Market data (public / offline fixture)
 | Dashboard “Run one paper cycle” | Next BFF → `/api/v1/paper/cycle/run` | Shares hydrated paper session |
 | Recovery panel | `frontend/app/recovery` → `/api/v1/recovery/status` | Ops SoT view |
 
-Post-cycle, `app/accounting/invariants.py` checks `cash + marked_position_value = equity` (fail-closed on critical violations).
+Post-cycle, `app/accounting/invariants.py` checks
+`cash + reserved_cash + marked_position_value = equity` (fail-closed on critical violations).
+
+## Reserved capital (buying power)
+
+- `PaperState.cash` = **available** quote balance (unreserved).
+- `PaperState.reserved_cash` = capital locked for open **BUY** orders (persisted as `paper_accounts.reserved_capital`).
+- On BUY accept: reserve `qty * reference_price` (limit/trigger/mark) from available → reserved.
+- On fill: release proportional reservation back to available, then debit actual fill cost + fee.
+- On cancel / expire / reject / fail: release remaining reservation **exactly once** (idempotent).
+- RiskEngine buying-power checks use available `cash_balance` only (never weakens OrderGateway).
 
 ## Idempotency
 

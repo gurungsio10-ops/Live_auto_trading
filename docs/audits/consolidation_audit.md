@@ -61,7 +61,7 @@ Path-set uniqueness: `|⋃(#21…#26) − #27| = 0`. No stranded unique files on
 - **Module mutable state:** session/cycle/scheduler/recon singletons — hydrated/persisted where durable
 - **Hidden in-memory:** runtime cache OK; durable SoT is DB
 - **Stale docs:** `docs/PRODUCTION_STATUS.md`, phase16 audits, uppercase CURRENT_STATE copies
-- **Unused reserved_capital:** schema present, runtime always 0
+- **Reserved capital:** runtime `PaperState.reserved_cash` dual-written to `paper_accounts.reserved_capital` + checkpoint; reserve on BUY accept, release exactly once on fill/cancel/reject/expire
 
 ## Authoritative runtime flow
 

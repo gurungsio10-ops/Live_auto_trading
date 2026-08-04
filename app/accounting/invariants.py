@@ -26,6 +26,7 @@ class InvariantReport:
     ok: bool
     equity: Decimal
     cash: Decimal
+    reserved_cash: Decimal
     marked_position_value: Decimal
     violations: list[InvariantViolation] = field(default_factory=list)
 
@@ -34,6 +35,7 @@ class InvariantReport:
             "ok": self.ok,
             "equity": str(self.equity),
             "cash": str(self.cash),
+            "reserved_cash": str(self.reserved_cash),
             "marked_position_value": str(self.marked_position_value),
             "violations": [
                 {"code": v.code, "message": v.message, "severity": v.severity}
@@ -43,15 +45,34 @@ class InvariantReport:
 
 
 def equity_from_cash_and_positions(
-    cash: Decimal, positions: dict[str, Any]
+    cash: Decimal,
+    positions: dict[str, Any],
+    reserved_cash: Decimal = Decimal("0"),
 ) -> tuple[Decimal, Decimal]:
-    """Return (equity, marked_position_value)."""
+    """Return (equity, marked_position_value).
+
+    Identity: ``cash + reserved_cash + marked_position_value = equity``.
+    """
     marked = Decimal("0")
     for pos in positions.values():
         qty = Decimal(str(pos.quantity))
         px = Decimal(str(pos.current_price))
         marked += qty * px
-    return cash + marked, marked
+    return cash + reserved_cash + marked, marked
+
+
+def _open_reservation_total(orders: dict[str, Any] | None) -> Decimal:
+    total = Decimal("0")
+    if not orders:
+        return total
+    for order in orders.values():
+        meta = getattr(order, "metadata", None) or {}
+        if meta.get("reservation_open") != "true":
+            continue
+        total += Decimal(
+            str(meta.get("reserved_remaining", meta.get("reserved_notional", "0")))
+        )
+    return total
 
 
 def check_cycle_invariants(
@@ -61,22 +82,26 @@ def check_cycle_invariants(
     realized_pnl: Decimal,
     fills: list[Any],
     orders: dict[str, Any] | None = None,
+    reserved_cash: Decimal = Decimal("0"),
     allow_negative_cash: bool = False,
     equity_tolerance: Decimal = Decimal("0.00000001"),
 ) -> InvariantReport:
     """
     Verify core accounting invariants for the paper ledger.
 
-    Identity: cash + marked_position_value = equity (within tolerance).
+    Identity: cash + reserved_cash + marked_position_value = equity.
+    Open BUY reservations must sum to ``reserved_cash`` (within tolerance).
     """
     violations: list[InvariantViolation] = []
-    equity, marked = equity_from_cash_and_positions(cash, positions)
-    recomputed = cash + marked
+    equity, marked = equity_from_cash_and_positions(
+        cash, positions, reserved_cash=reserved_cash
+    )
+    recomputed = cash + reserved_cash + marked
     if abs(equity - recomputed) > equity_tolerance:
         violations.append(
             InvariantViolation(
                 code="EQUITY_IDENTITY",
-                message=f"equity {equity} != cash+marked {recomputed}",
+                message=f"equity {equity} != cash+reserved+marked {recomputed}",
                 severity="critical",
             )
         )
@@ -86,6 +111,27 @@ def check_cycle_invariants(
             InvariantViolation(
                 code="NEGATIVE_CASH",
                 message=f"cash {cash} < 0",
+                severity="critical",
+            )
+        )
+
+    if reserved_cash < 0:
+        violations.append(
+            InvariantViolation(
+                code="NEGATIVE_RESERVED",
+                message=f"reserved_cash {reserved_cash} < 0",
+                severity="critical",
+            )
+        )
+
+    open_res = _open_reservation_total(orders)
+    if abs(open_res - reserved_cash) > Decimal("0.00000001"):
+        violations.append(
+            InvariantViolation(
+                code="RESERVATION_MISMATCH",
+                message=(
+                    f"open order reservations {open_res} != reserved_cash {reserved_cash}"
+                ),
                 severity="critical",
             )
         )
@@ -173,6 +219,25 @@ def check_cycle_invariants(
                             severity="critical",
                         )
                     )
+            # Terminal orders must not still hold an open reservation.
+            if (
+                status
+                in {
+                    "FILLED",
+                    "CANCELLED",
+                    "EXPIRED",
+                    "REJECTED",
+                    "FAILED",
+                }
+                and meta.get("reservation_open") == "true"
+            ):
+                violations.append(
+                    InvariantViolation(
+                        code="STALE_RESERVATION",
+                        message=f"order {getattr(order, 'id', '?')} {status} still reserved",
+                        severity="critical",
+                    )
+                )
 
     # Realised PnL sign sanity vs fills (soft): must be finite Decimal.
     _ = realized_pnl + fees  # touch fees for coverage of fee aggregate
@@ -182,6 +247,7 @@ def check_cycle_invariants(
         ok=len(critical) == 0,
         equity=equity,
         cash=cash,
+        reserved_cash=reserved_cash,
         marked_position_value=marked,
         violations=violations,
     )

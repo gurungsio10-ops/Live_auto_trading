@@ -151,15 +151,17 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
     session = get_paper_session()
     paper = session.paper
     cash = paper.state.cash
+    reserved = paper.state.reserved_cash
+    total_cash = cash + reserved
     mismatches: list[Mismatch] = []
-    cash_ok = cash >= Decimal("0")
+    cash_ok = cash >= Decimal("0") and reserved >= Decimal("0")
     if not cash_ok:
         mismatches.append(
             Mismatch(
                 field="cash",
-                expected=">=0",
-                observed=str(cash),
-                difference=str(cash),
+                expected=">=0 available and reserved",
+                observed=f"cash={cash} reserved={reserved}",
+                difference=str(min(cash, reserved)),
                 severity="critical",
             )
         )
@@ -226,10 +228,11 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
         if qty > 0 and symbol not in paper.state.positions:
             ledger_complete = False
 
-    drift = abs(reconstructed - cash)
+    # Fill reconstruction yields total liquid capital (available + reserved).
+    drift = abs(reconstructed - total_cash)
     if len(paper.state.fills) == 0:
         drift_ok = True
-        reconstructed = cash
+        reconstructed = total_cash
     elif not ledger_complete:
         # Incomplete fill history — do not fail-closed on naive reconstruction.
         drift_ok = True
@@ -240,18 +243,18 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
                 Mismatch(
                     field="cash_vs_fill_ledger",
                     expected=str(reconstructed),
-                    observed=str(cash),
+                    observed=str(total_cash),
                     difference=str(drift),
                     severity="critical",
                 )
             )
 
-    # Equity invariant: cash + marked positions ≈ equity (tolerance).
+    # Equity invariant: cash + reserved + marked positions.
     marked = sum(
         (p.quantity * p.current_price for p in paper.state.positions.values()),
         Decimal("0"),
     )
-    equity = cash + marked
+    equity = total_cash + marked
     # Fill quantity cannot exceed order quantity.
     for order in paper.state.orders.values():
         filled_qty = sum(
@@ -297,7 +300,7 @@ async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationRes
         cash_ok=cash_ok and drift_ok,
         positions_ok=positions_ok,
         detail=detail,
-        cash=str(cash),
+        cash=str(total_cash),
         position_count=len(paper.state.positions),
         mismatches=mismatches,
         equity=str(equity),

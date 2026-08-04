@@ -348,7 +348,7 @@ class TradingOrchestrator:
         return list(self.paper.state.positions.values())
 
     def _equity(self) -> Decimal:
-        total = self.paper.state.cash
+        total = self.paper.state.cash + self.paper.state.reserved_cash
         for pos in self._positions():
             total += pos.quantity * pos.current_price
         return total

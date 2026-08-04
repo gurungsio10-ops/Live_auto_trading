@@ -250,7 +250,8 @@ class PaperSession:
         return list(self.paper.state.positions.values())
 
     def _equity(self) -> Decimal:
-        total = self.paper.state.cash
+        # Available + reserved + marked positions (spot paper, 1x).
+        total = self.paper.state.cash + self.paper.state.reserved_cash
         for pos in self._positions():
             total += pos.quantity * pos.current_price
         return total
@@ -266,6 +267,7 @@ class PaperSession:
         unrealized = sum((p.unrealized_pnl for p in self._positions()), Decimal(0))
         daily_pnl = equity - self._daily_start_equity
         return PortfolioState(
+            # cash_balance is *available* buying power (excludes reserved).
             cash_balance=self.paper.state.cash,
             equity=equity,
             realized_pnl=self.paper.state.realized_pnl,
@@ -504,6 +506,8 @@ class PaperSession:
             state = self._portfolio_state()
             return {
                 "cash_balance": _q(state.cash_balance),
+                "available_balance": _q(self.paper.state.cash),
+                "reserved_capital": _q(self.paper.state.reserved_cash),
                 "equity": _q(state.equity),
                 "realized_pnl": _q(state.realized_pnl),
                 "unrealized_pnl": _q(state.unrealized_pnl),
@@ -1119,6 +1123,11 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
     if checkpoint:
         cash = Decimal(str(checkpoint.get("cash", paper.paper.state.cash)))
         paper.paper.state.cash = cash
+        paper.paper.state.reserved_cash = Decimal(
+            str(
+                checkpoint.get("reserved_cash", checkpoint.get("reserved_capital", "0"))
+            )
+        )
         paper._peak_equity = Decimal(
             str(checkpoint.get("peak_equity", paper._peak_equity))
         )
@@ -1140,6 +1149,9 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
     elif account is not None:
         # First-class account row when checkpoint JSON is absent.
         paper.paper.state.cash = Decimal(str(account["cash"]))
+        paper.paper.state.reserved_cash = Decimal(
+            str(account.get("reserved_capital") or "0")
+        )
         paper.paper.state.realized_pnl = Decimal(str(account["realized_pnl"]))
         paper._peak_equity = Decimal(str(account["peak_equity"]))
         paper._daily_start_equity = Decimal(str(account["daily_start_equity"]))
@@ -1252,9 +1264,16 @@ async def persist_paper_session(
     )
     await store.save_trading_paused(session, paused=paper.trading_paused, commit=False)
     fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
-    equity = paper.paper.state.cash + sum(
-        (p.quantity * p.current_price for p in paper.paper.state.positions.values()),
-        Decimal("0"),
+    equity = (
+        paper.paper.state.cash
+        + paper.paper.state.reserved_cash
+        + sum(
+            (
+                p.quantity * p.current_price
+                for p in paper.paper.state.positions.values()
+            ),
+            Decimal("0"),
+        )
     )
     drawdown = (
         (paper._peak_equity - equity) / paper._peak_equity
@@ -1264,6 +1283,7 @@ async def persist_paper_session(
     await store.save_paper_checkpoint(
         session,
         cash=paper.paper.state.cash,
+        reserved_cash=paper.paper.state.reserved_cash,
         positions=dict(paper.paper.state.positions),
         realized_pnl=paper.paper.state.realized_pnl,
         peak_equity=paper._peak_equity,
@@ -1279,6 +1299,7 @@ async def persist_paper_session(
     await store.save_paper_account(
         session,
         cash=paper.paper.state.cash,
+        reserved_capital=paper.paper.state.reserved_cash,
         realized_pnl=paper.paper.state.realized_pnl,
         peak_equity=paper._peak_equity,
         daily_start_equity=paper._daily_start_equity,

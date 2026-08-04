@@ -2,26 +2,27 @@
 
 **Release branch:** `cursor/release-paper-v1-consolidated-e3a2`  
 *(Semantic name: `release/paper-v1-consolidated`; cloud-agent branch policy requires `cursor/*-e3a2`.)*  
-**Preferred base tip:** PR **#26** (`cursor/durable-paper-recovery-e3a2`)  
+**Authoritative PR:** **#27** → `main`  
 **Constraint:** PAPER ONLY — no live money, futures, leverage >1x, withdrawals, or autonomous AI execution.
+
+**Exact human checklist:** [`docs/releases/pr27_merge_close_checklist.md`](../releases/pr27_merge_close_checklist.md)
 
 ## 1. Which PR/branch to merge
 
 | Action | Target |
 |--------|--------|
-| **MERGE** | This release PR from `cursor/release-paper-v1-consolidated-e3a2` → `main` |
+| **MERGE** | PR **#27** from `cursor/release-paper-v1-consolidated-e3a2` → `main` (squash) |
 | Upstream tip absorbed | PR **#26** (all of #21–#25 are ancestors) |
 
-Do **not** merge #21–#25 separately; they are linear ancestors of #26 and of this release.
+Do **not** merge #21–#26 separately; they are linear ancestors of #27.
 
 ## 2. Older PRs to close as superseded
 
 Close after the release merge lands on `main`:
 
-- #21, #22, #23, #24, #25 — superseded ancestors
-- #26 — superseded by this release branch (or close as “merged via release”)
-- #3–#18 phase/verification PRs still open — close as historical
-- #20 (binance testnet) — leave open only if a separate testnet milestone is planned; otherwise close as out of paper-v1 scope
+- #21, #22, #23, #24, #25, #26 — superseded / absorbed
+- #3–#18 phase/verification PRs still open — close as historical (optional)
+- **#20 (binance testnet) — OUT OF SCOPE** — leave open; do not close as part of paper-v1
 
 ## 3. Squash vs regular merge
 
@@ -103,17 +104,18 @@ Dashboard: open `/recovery`, confirm runtime/recon/persistence fields populate. 
 
 ## 8. Next milestone after consolidation
 
-1. Multi-day PostgreSQL soak under supervision (`paper-soak --duration-hours 24`)
-2. Hardening of alert delivery + ops paging
-3. Optional Binance/Bybit **testnet** execution path behind explicit gates (still no live money)
-4. Only after signed `docs/operations/live_trading_readiness_checklist.md`: consider live design review (not implementation)
+1. Reserved capital / buying-power accounting (implemented on this lineage — see paper engine)
+2. Multi-day PostgreSQL soak under supervision (`paper-soak --duration-hours 24`)
+3. Hardening of alert delivery + ops paging
+4. Optional Binance/Bybit **testnet** execution path behind explicit gates (still no live money) — PR #20
+5. Only after signed `docs/operations/live_trading_readiness_checklist.md`: consider live design review (not implementation)
 
 ## Disposition summary
 
 | PR | Disposition |
 |----|-------------|
-| Release PR (this branch) | **MERGE** |
+| **#27** (this branch) | **MERGE** (squash) |
 | #26 | close after merge (absorbed) |
 | #21–#25 | **close after merge** (superseded) |
-| #20 | out of scope / separate |
-| #3–#18 | close as historical |
+| #20 | **out of scope** — leave open |
+| #3–#18 | close as historical (optional) |

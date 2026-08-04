@@ -271,6 +271,7 @@ async def save_paper_checkpoint(
     consecutive_losses: int,
     idempotency_index: dict[str, str],
     fees_paid: Decimal = Decimal("0"),
+    reserved_cash: Decimal = Decimal("0"),
     daily_start_equity: Decimal | None = None,
     correlation_id: str | None = None,
     fills: list[Any] | None = None,
@@ -288,12 +289,13 @@ async def save_paper_checkpoint(
                 id=uuid4().hex,
                 asset="USDT",
                 free=cash,
-                locked=Decimal("0"),
+                locked=reserved_cash,
                 as_of=now,
             )
         )
     else:
         bal.free = cash
+        bal.locked = reserved_cash
         bal.as_of = now
 
     # Replace positions
@@ -316,8 +318,12 @@ async def save_paper_checkpoint(
             )
         )
 
-    equity = cash + sum((p.quantity * p.current_price) for p in positions.values())
-    unrealized = equity - cash
+    equity = (
+        cash
+        + reserved_cash
+        + sum((p.quantity * p.current_price) for p in positions.values())
+    )
+    unrealized = equity - cash - reserved_cash
     session.add(
         PortfolioSnapshotORM(
             id=uuid4().hex,
@@ -325,7 +331,7 @@ async def save_paper_checkpoint(
             equity=equity,
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized,
-            daily_pnl=equity - cash,  # relative; refined by session daily start
+            daily_pnl=equity - cash - reserved_cash,  # relative; refined by session
             peak_equity=peak_equity,
             drawdown=(
                 (peak_equity - equity) / peak_equity
@@ -335,7 +341,10 @@ async def save_paper_checkpoint(
             fees_paid=fees_paid,
             exposure=unrealized,
             correlation_id=correlation_id,
-            payload={"source": "paper_checkpoint"},
+            payload={
+                "source": "paper_checkpoint",
+                "reserved_cash": str(reserved_cash),
+            },
             created_at=now,
         )
     )
@@ -346,6 +355,8 @@ async def save_paper_checkpoint(
         KEY_PAPER_CHECKPOINT,
         {
             "cash": str(cash),
+            "reserved_cash": str(reserved_cash),
+            "reserved_capital": str(reserved_cash),
             "realized_pnl": str(realized_pnl),
             "peak_equity": str(peak_equity),
             "daily_start_equity": str(daily_start),

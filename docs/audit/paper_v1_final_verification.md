@@ -48,7 +48,7 @@ Cycle entry: `run_paper_trading_cycle` (`app/services/paper_cycle.py`).
 - Duplicate cycle / fill idempotency
 - Alembic chain including main `0004` → head
 - Fail-closed bootstrap when durable state untrusted
-- Accounting identity: `cash + marked_position_value = equity`
+- Accounting identity: `cash + reserved_cash + marked_position_value = equity`
 
 ## Soak harness
 

@@ -48,7 +48,15 @@ class PaperConfig:
 
 @dataclass
 class PaperState:
+    """Paper ledger.
+
+    ``cash`` is *available* (unreserved) buying power.
+    ``reserved_cash`` is capital locked for open BUY orders.
+    Equity identity: ``cash + reserved_cash + marked_positions``.
+    """
+
     cash: Decimal
+    reserved_cash: Decimal = Decimal("0")
     positions: dict[str, Position] = field(default_factory=dict)
     orders: dict[str, Order] = field(default_factory=dict)
     fills: list[Fill] = field(default_factory=list)
@@ -56,13 +64,19 @@ class PaperState:
     idempotency_index: dict[str, str] = field(default_factory=dict)
     realized_pnl: Decimal = Decimal("0")
 
+    @property
+    def total_cash(self) -> Decimal:
+        return self.cash + self.reserved_cash
+
 
 class PaperTradingEngine:
     """Simulated execution backend compatible with OrderGateway."""
 
     def __init__(self, config: PaperConfig | None = None) -> None:
         self.config = config or PaperConfig()
-        self.state = PaperState(cash=self.config.initial_cash)
+        self.state = PaperState(
+            cash=self.config.initial_cash, reserved_cash=Decimal("0")
+        )
         self._rng = random.Random(self.config.seed)
 
     def set_mark_price(self, symbol: str, price: Decimal) -> None:
@@ -82,6 +96,96 @@ class PaperTradingEngine:
         if not is_maker and self.config.taker_fee_rate is not None:
             return self.config.taker_fee_rate
         return self.config.fee_rate
+
+    def _reserve_price(
+        self, request: OrderRequest, mark: Decimal | None
+    ) -> Decimal | None:
+        """Reference price used to lock BUY notional (limit/trigger/mark)."""
+        if request.order_type == OrderType.LIMIT and request.price is not None:
+            return request.price
+        if request.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
+            return request.price or request.stop_loss or request.take_profit or mark
+        return mark
+
+    def _reserve_buy(
+        self,
+        order: Order,
+        qty: Decimal,
+        price: Decimal,
+        risk: RiskEvaluation,
+    ) -> tuple[Order, bool]:
+        """Move ``qty * price`` from available cash into reserved_cash once."""
+        meta = dict(order.metadata or {})
+        if meta.get("reservation_open") == "true":
+            return order, True
+        amount = (qty * price).quantize(Decimal("0.00000001"))
+        if amount <= 0:
+            return order, True
+        if self.state.cash < amount:
+            failed = self._update(
+                order,
+                status=OrderStatus.FAILED,
+                risk=risk,
+                extra={"error": "insufficient_for_reserve"},
+            )
+            return failed, False
+        self.state.cash -= amount
+        self.state.reserved_cash += amount
+        meta["reserved_notional"] = str(amount)
+        meta["reserved_remaining"] = str(amount)
+        meta["reservation_open"] = "true"
+        self._journal(
+            "RESERVE",
+            {"id": order.id, "amount": str(amount), "symbol": order.symbol},
+        )
+        updated = order.model_copy(update={"metadata": meta, "updated_at": utc_now()})
+        self.state.orders[updated.id] = updated
+        return updated, True
+
+    def _release_buy_reservation(
+        self, order: Order, amount: Decimal | None = None
+    ) -> Order:
+        """Return reserved capital to available cash exactly once per unit.
+
+        ``amount=None`` releases all remaining reservation (cancel/expire/reject/
+        terminal fill dust). Partial fills pass a proportional ``amount``.
+        Duplicate calls are no-ops when reservation is already closed.
+        """
+        meta = dict(order.metadata or {})
+        if meta.get("reservation_open") != "true":
+            return order
+        remaining = Decimal(
+            str(meta.get("reserved_remaining", meta.get("reserved_notional", "0")))
+        )
+        if remaining <= 0:
+            meta["reservation_open"] = "false"
+            meta["reserved_remaining"] = "0"
+            updated = order.model_copy(
+                update={"metadata": meta, "updated_at": utc_now()}
+            )
+            self.state.orders[updated.id] = updated
+            return updated
+        release = remaining if amount is None else min(amount, remaining)
+        if release > self.state.reserved_cash:
+            release = self.state.reserved_cash
+        self.state.reserved_cash -= release
+        self.state.cash += release
+        new_remaining = remaining - release
+        meta["reserved_remaining"] = str(new_remaining)
+        if new_remaining <= 0:
+            meta["reservation_open"] = "false"
+            meta["reserved_remaining"] = "0"
+        self._journal(
+            "RESERVE_RELEASE",
+            {
+                "id": order.id,
+                "amount": str(release),
+                "remaining": meta["reserved_remaining"],
+            },
+        )
+        updated = order.model_copy(update={"metadata": meta, "updated_at": utc_now()})
+        self.state.orders[updated.id] = updated
+        return updated
 
     async def submit(self, request: OrderRequest, risk: RiskEvaluation) -> Order:
         # Idempotency: return existing order for same key
@@ -142,12 +246,37 @@ class PaperTradingEngine:
             OrderType.STOP_LOSS,
             OrderType.TAKE_PROFIT,
         ):
-            # Rest until mark is known.
+            # Rest until mark is known — still reserve BUY buying power.
+            if request.side == OrderSide.BUY:
+                reserve_px = self._reserve_price(request, mark)
+                if reserve_px is not None:
+                    order, ok = self._reserve_buy(
+                        order,
+                        risk.approved_quantity or request.quantity,
+                        reserve_px,
+                        risk,
+                    )
+                    if not ok:
+                        return order
             return order
         if mark is None:
             return self._update(
                 order, status=OrderStatus.FAILED, risk=risk, extra={"error": "no mark"}
             )
+
+        # Lock BUY notional before resting or filling so concurrent buys
+        # cannot double-spend available cash.
+        if request.side == OrderSide.BUY:
+            reserve_px = self._reserve_price(request, mark)
+            if reserve_px is not None:
+                order, ok = self._reserve_buy(
+                    order,
+                    risk.approved_quantity or request.quantity,
+                    reserve_px,
+                    risk,
+                )
+                if not ok:
+                    return order
 
         if request.order_type == OrderType.LIMIT and request.price is not None:
             # Fill limit only if market crosses
@@ -159,6 +288,7 @@ class PaperTradingEngine:
         if request.order_type == OrderType.STOP_LOSS:
             trigger = request.price or request.stop_loss
             if trigger is None:
+                order = self._release_buy_reservation(order)
                 return self._update(
                     order,
                     status=OrderStatus.REJECTED,
@@ -174,6 +304,7 @@ class PaperTradingEngine:
         if request.order_type == OrderType.TAKE_PROFIT:
             trigger = request.price or request.take_profit
             if trigger is None:
+                order = self._release_buy_reservation(order)
                 return self._update(
                     order,
                     status=OrderStatus.REJECTED,
@@ -247,9 +378,12 @@ class PaperTradingEngine:
             updated = self._apply_fill(
                 order, fill_qty, fill_price, risk, is_maker=is_maker
             )
+            if updated.status == OrderStatus.FAILED:
+                continue
             if fill_qty < remaining:
                 self._update(updated, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
             else:
+                updated = self._release_buy_reservation(updated)
                 self._update(updated, status=OrderStatus.FILLED, risk=risk)
 
     def _execute_fill(
@@ -271,9 +405,14 @@ class PaperTradingEngine:
             order = self._apply_fill(
                 order, fill_qty, fill_price, risk, is_maker=is_maker
             )
+            if order.status == OrderStatus.FAILED:
+                return order
             return self._update(order, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
 
         order = self._apply_fill(order, fill_qty, fill_price, risk, is_maker=is_maker)
+        if order.status == OrderStatus.FAILED:
+            return order
+        order = self._release_buy_reservation(order)  # rounding dust
         return self._update(order, status=OrderStatus.FILLED, risk=risk)
 
     def _apply_fill(
@@ -301,8 +440,23 @@ class PaperTradingEngine:
         self._journal("FILL", fill)
 
         if order.side == OrderSide.BUY:
+            # Release proportional reservation back to available cash, then debit
+            # actual fill cost (existing accounting path). Idempotent release.
+            total_reserved = Decimal(
+                str((order.metadata or {}).get("reserved_notional", "0"))
+            )
+            if (
+                total_reserved > 0
+                and (order.metadata or {}).get("reservation_open") == "true"
+                and order.quantity > 0
+            ):
+                consume = (total_reserved * qty / order.quantity).quantize(
+                    Decimal("0.00000001")
+                )
+                order = self._release_buy_reservation(order, consume)
             cost = price * qty + fee
             if cost > self.state.cash:
+                order = self._release_buy_reservation(order)
                 return self._update(
                     order,
                     status=OrderStatus.FAILED,
@@ -432,6 +586,7 @@ class PaperTradingEngine:
         if order.status not in cancellable:
             return order
         # Partial fills keep filled qty; remaining is cancelled.
+        order = self._release_buy_reservation(order)
         updated = order.model_copy(
             update={"status": OrderStatus.CANCELLED, "updated_at": utc_now()}
         )
@@ -450,6 +605,7 @@ class PaperTradingEngine:
             OrderStatus.APPROVED,
         }:
             return order
+        order = self._release_buy_reservation(order)
         updated = order.model_copy(
             update={"status": OrderStatus.EXPIRED, "updated_at": utc_now()}
         )
@@ -460,6 +616,8 @@ class PaperTradingEngine:
     def snapshot(self) -> dict[str, Any]:
         return {
             "cash": str(self.state.cash),
+            "reserved_cash": str(self.state.reserved_cash),
+            "total_cash": str(self.state.total_cash),
             "realized_pnl": str(self.state.realized_pnl),
             "positions": {
                 k: v.model_dump(mode="json") for k, v in self.state.positions.items()

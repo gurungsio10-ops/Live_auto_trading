@@ -28,7 +28,7 @@ class PortfolioManager:
             (p.quantity * p.current_price for p in paper.state.positions.values()),
             Decimal("0"),
         )
-        return paper.state.cash + marked
+        return paper.state.cash + paper.state.reserved_cash + marked
 
     def _period_pnl(self, *, days: int) -> Decimal:
         """Approximate period PnL from equity curve points within the window."""
@@ -57,6 +57,7 @@ class PortfolioManager:
         summary = self.session.portfolio_summary()
         equity = self._equity()
         cash = self.session.paper.state.cash
+        reserved = self.session.paper.state.reserved_cash
         positions = self.session.positions()
         exposure = sum(
             (
@@ -80,7 +81,8 @@ class PortfolioManager:
         return {
             **summary,
             "available_balance": str(cash),
-            "margin_balance": str(cash),  # spot paper — cash is available capital
+            "reserved_capital": str(reserved),
+            "margin_balance": str(cash),  # spot paper — available capital only
             "leverage": "1",
             "margin_mode": "spot_paper",
             "exposure": str(exposure.quantize(Decimal("0.01"))),

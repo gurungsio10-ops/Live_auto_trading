@@ -47,4 +47,12 @@ curl -sf -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
 
 ## Merge recommendation
 
-Squash-merge PR #27 into `main`. See `docs/audit/release_merge_plan.md` and `docs/audits/consolidation_audit.md`.
+Squash-merge PR #27 into `main`. Exact steps:
+`docs/releases/pr27_merge_close_checklist.md` (also `docs/audit/release_merge_plan.md`).
+
+## Reserved capital (post-consolidation hardening on same lineage)
+
+- Available cash vs reserved cash for open paper BUY orders
+- Idempotent release on fill / cancel / expire / reject
+- Invariants: `cash + reserved_cash + marked = equity` + reservation ledger match
+- Fail-closed persistence and reconciliation unchanged in spirit; recon compares fill reconstruction to `cash + reserved`

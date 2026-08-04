@@ -169,6 +169,7 @@ async def run_paper_soak(config: SoakConfig | None = None) -> dict[str, Any]:
 
             inv = check_cycle_invariants(
                 cash=session.paper.state.cash,
+                reserved_cash=session.paper.state.reserved_cash,
                 positions=dict(session.paper.state.positions),
                 realized_pnl=session.paper.state.realized_pnl,
                 fills=list(session.paper.state.fills),

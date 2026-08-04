@@ -601,6 +601,7 @@ async def _run_paper_trading_cycle_inner(
             )
             inv = check_cycle_invariants(
                 cash=ledger.state.cash,
+                reserved_cash=ledger.state.reserved_cash,
                 positions=dict(ledger.state.positions),
                 realized_pnl=ledger.state.realized_pnl,
                 fills=list(ledger.state.fills),
