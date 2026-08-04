@@ -36,9 +36,20 @@ if [[ ! -d .venv ]]; then
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
+python -m pip install -q -U pip
 pip install -q -e ".[dev]"
 
+if [[ ! -f .env ]]; then
+  cp .env.example .env
+fi
+
 echo "==> DATABASE_URL=${DATABASE_URL}"
+# Fail fast if .env cannot be parsed (e.g. historical ALLOWED_SYMBOLS JSON issues).
+python - <<'PY'
+from app.core.config import Settings
+s = Settings()
+print("settings_ok", s.trading_mode, s.supported_symbols)
+PY
 alembic upgrade head
 
 mkdir -p frontend
@@ -56,9 +67,9 @@ fi
 
 npm --prefix frontend ci >/dev/null
 
-echo "==> starting FastAPI on 0.0.0.0:8000"
+echo "==> starting FastAPI on 0.0.0.0:8000 via .venv"
 pkill -f 'uvicorn app.main:app' >/dev/null 2>&1 || true
-nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload > /tmp/atlas-api.log 2>&1 &
+nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload > /tmp/atlas-api.log 2>&1 &
 sleep 2
 curl -sf "http://127.0.0.1:8000/health" >/dev/null
 curl -sf "http://127.0.0.1:8000/ready" >/dev/null

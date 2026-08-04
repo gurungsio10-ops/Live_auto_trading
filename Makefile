@@ -13,22 +13,27 @@ help:
 	@echo "  make down          Stop docker compose data plane"
 
 setup:
-	python -m pip install -e ".[dev]"
+	python3 -m venv .venv
+	.venv/bin/python -m pip install -U pip
+	.venv/bin/pip install -e ".[dev]"
 	npm --prefix frontend ci
 	@test -f .env || cp .env.example .env
-	@echo "Setup complete. Keep TRADING_MODE=paper and TRADING_ENABLED=false."
+	@test -f frontend/.env.local || cp frontend/.env.example frontend/.env.local
+	@echo "Setup complete. Activate with: source .venv/bin/activate"
+	@echo "Keep TRADING_MODE=paper and TRADING_ENABLED=false."
 
 migrate:
-	alembic upgrade head
+	.venv/bin/alembic upgrade head
 
 dev:
 	TRADING_MODE=paper TRADING_ENABLED=false ENABLE_LIVE_TRADING=false \
-	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend-dev:
 	ADMIN_API_TOKEN=local-dev-admin-token \
-ATLAS_BACKEND_URL=http://127.0.0.1:8000 \
-npm --prefix frontend run dev
+	ATLAS_BACKEND_URL=http://127.0.0.1:8000 \
+	ATLAS_AUTH_SECRET=atlas-dev-secret-change-me \
+	npm --prefix frontend run dev -- --hostname 0.0.0.0 --port 3000
 
 # Production-ish local stack (Postgres + API image)
 docker compose up -d --build

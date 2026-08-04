@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.errors import ConfigurationError, LiveTradingDisabledError
 from app.core.runtime_mode import RuntimeMode, derive_runtime_mode
@@ -158,7 +159,9 @@ class Settings(BaseSettings):
     min_order_notional: Decimal = Decimal("10")
     default_leverage: Decimal = Decimal("1")
 
-    supported_symbols: tuple[str, ...] = Field(
+    # NoDecode: pydantic-settings otherwise JSON-decodes tuple fields and rejects
+    # plain env values like ALLOWED_SYMBOLS=BTC/USDT (common Codespaces/.env.example).
+    supported_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
         default=("BTC/USDT",),
         validation_alias="ALLOWED_SYMBOLS",
     )
@@ -239,9 +242,22 @@ class Settings(BaseSettings):
     @field_validator("supported_symbols", mode="before")
     @classmethod
     def _parse_symbols(cls, value: object) -> object:
+        if value is None or value == "":
+            return ("BTC/USDT",)
         if isinstance(value, str):
-            parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
-            return tuple(parts)
+            raw = value.strip()
+            # Accept JSON list form as well as comma-separated symbols.
+            if raw.startswith("["):
+                try:
+                    decoded = json.loads(raw)
+                except json.JSONDecodeError:
+                    decoded = None
+                if isinstance(decoded, list):
+                    return tuple(str(p).strip() for p in decoded if str(p).strip())
+            parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+            return tuple(parts) or ("BTC/USDT",)
+        if isinstance(value, (list, tuple)):
+            return tuple(str(p).strip() for p in value if str(p).strip())
         return value
 
     @field_validator(
