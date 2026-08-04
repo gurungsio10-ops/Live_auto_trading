@@ -247,17 +247,52 @@ async def portfolio_history(pagination: PaginationDep) -> dict[str, Any]:
     ),
 )
 async def recovery_status() -> dict[str, Any]:
+    from app.core.config import get_settings
+    from app.services import paper_cycle
     from app.services.reconciliation import reconciliation_status
+    from app.services.trading_scheduler import scheduler_status
 
+    settings = get_settings()
     session = get_paper_session()
     rs = session.risk_engine.state
     recon = reconciliation_status()
+    from decimal import Decimal
+
+    last = paper_cycle.last_cycle_result()
+    equity = session.paper.state.cash + sum(
+        (p.quantity * p.current_price for p in session.paper.state.positions.values()),
+        Decimal("0"),
+    )
+    try:
+        sched = scheduler_status()
+    except Exception:
+        sched = {"running": False, "detail": "unavailable"}
     return {
         "recovery": {
+            "runtime_mode": settings.runtime_mode.value
+            if hasattr(settings.runtime_mode, "value")
+            else str(settings.runtime_mode),
+            "trading_mode": settings.trading_mode,
             "reconciliation": recon,
             "kill_switch_enabled": session.kill_switch_enabled,
             "trading_enabled": session.trading_enabled,
             "trading_paused": session.trading_paused,
+            "last_hydrated_at": session.last_hydrated_at,
+            "persistence_status": ("healthy" if rs.database_healthy else "degraded"),
+            "database_status": "ok" if rs.database_healthy else "unhealthy",
+            "scheduler": sched,
+            "market_data_stale": not rs.market_data_healthy,
+            "last_cycle": None
+            if last is None
+            else {
+                "correlation_id": last.correlation_id,
+                "accepted": last.accepted,
+                "signal_direction": last.signal_direction,
+                "order_status": last.order_status,
+                "reject_reason": last.reject_reason,
+                "idempotent_replay": last.idempotent_replay,
+                "message": last.message,
+            },
             "risk": {
                 "reconciliation_healthy": rs.reconciliation_healthy,
                 "risk_engine_healthy": rs.risk_engine_healthy,
@@ -269,6 +304,7 @@ async def recovery_status() -> dict[str, Any]:
             },
             "portfolio": {
                 "cash": str(session.paper.state.cash),
+                "equity": str(equity),
                 "realized_pnl": str(session.paper.state.realized_pnl),
                 "peak_equity": str(session._peak_equity),
                 "daily_start_equity": str(session._daily_start_equity),
@@ -285,6 +321,16 @@ async def recovery_status() -> dict[str, Any]:
                     }
                 ),
                 "fills": len(session.paper.state.fills),
+                "positions": [
+                    {
+                        "symbol": p.symbol,
+                        "quantity": str(p.quantity),
+                        "entry_price": str(p.entry_price),
+                        "current_price": str(p.current_price),
+                        "unrealized_pnl": str(p.unrealized_pnl),
+                    }
+                    for p in session.paper.state.positions.values()
+                ],
             },
             "strategy": {
                 "selected_strategy_id": session.selected_strategy_id,

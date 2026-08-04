@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const links = [
   { href: "/", label: "Overview" },
+  { href: "/recovery", label: "Recovery" },
   { href: "/positions", label: "Positions" },
   { href: "/orders", label: "Orders" },
   { href: "/fills", label: "Fills" },
@@ -49,7 +50,7 @@ export function Sidebar() {
         })}
       </nav>
       <div className="border-t border-terminal-border p-3 text-[10px] text-terminal-dim font-mono">
-        Phase 11 · FastAPI proxy
+        Paper V1 · FastAPI proxy
       </div>
     </aside>
   );

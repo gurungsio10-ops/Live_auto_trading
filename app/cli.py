@@ -249,13 +249,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--offline", action="store_true", help="use deterministic offline sample data"
     )
     pr.set_defaults(func=paper_run)
+
+    soak = sub.add_parser(
+        "paper-soak",
+        help="Deterministic paper soak with restarts (no exchange credentials)",
+    )
+    soak.add_argument("--duration-hours", type=float, default=0.01)
+    soak.add_argument("--symbols", default="BTC/USDT,ETH/USDT")
+    soak.add_argument("--restart-interval-minutes", type=float, default=0.05)
+    soak.add_argument("--seed", type=int, default=42)
+    soak.add_argument("--artifact-dir", default="artifacts/soak")
+    soak.add_argument(
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Optional hard cap (useful for CI)",
+    )
+    soak.set_defaults(func=_paper_soak)
     return parser
+
+
+def _paper_soak(args: argparse.Namespace) -> int:
+    from app.services.paper_soak import paper_soak_cli
+
+    return asyncio.run(paper_soak_cli(args))
 
 
 def main(argv: list[str] | None = None) -> int:
     configure_logging(get_settings().log_level)
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "paper-soak":
+        return args.func(args)
     return asyncio.run(args.func(args))
 
 

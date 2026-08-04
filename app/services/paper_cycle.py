@@ -590,6 +590,44 @@ async def _run_paper_trading_cycle_inner(
                 "lock_status": lock_status,
             },
         )
+        # Accounting invariants — fail closed on critical violations.
+        try:
+            from app.accounting.invariants import check_cycle_invariants
+            from app.services.paper_session import get_paper_session
+
+            session_paper = get_paper_session()
+            ledger = (
+                session_paper.paper if orch.paper is session_paper.paper else orch.paper
+            )
+            inv = check_cycle_invariants(
+                cash=ledger.state.cash,
+                positions=dict(ledger.state.positions),
+                realized_pnl=ledger.state.realized_pnl,
+                fills=list(ledger.state.fills),
+                orders=dict(ledger.state.orders),
+            )
+            if not inv.ok:
+                logger.error(
+                    "paper_cycle_invariant_failed",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "violations": inv.to_dict()["violations"],
+                    },
+                )
+                _fail_closed_persistence(
+                    reason="accounting invariant failure after cycle"
+                )
+        except Exception as exc:
+            logger.error(
+                "paper_cycle_invariant_check_error",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error": type(exc).__name__,
+                },
+            )
+            _fail_closed_persistence(
+                reason=f"invariant check error: {type(exc).__name__}"
+            )
         # Durable persistence — fail closed on write failure so memory and DB
         # cannot silently diverge while trading continues.
         try:

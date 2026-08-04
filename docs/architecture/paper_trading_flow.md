@@ -24,7 +24,11 @@ Market data (public / offline fixture)
 | `run_paper_trading_cycle(...)` | `app/services/paper_cycle.py` | Single-cycle façade (API + tests) |
 | `TradingOrchestrator.process_candle` | `app/services/trading_orchestrator.py` | Event-driven core |
 | CLI `python -m app.cli paper-run` | `app/cli.py` | Streaming offline/public feed |
-| Dashboard “Run one paper cycle” | Next BFF → `/api/v1/paper/cycle/run` | Shares in-memory paper session |
+| CLI `python -m app.cli paper-soak` | `app/services/paper_soak.py` | Deterministic endurance harness |
+| Dashboard “Run one paper cycle” | Next BFF → `/api/v1/paper/cycle/run` | Shares hydrated paper session |
+| Recovery panel | `frontend/app/recovery` → `/api/v1/recovery/status` | Ops SoT view |
+
+Post-cycle, `app/accounting/invariants.py` checks `cash + marked_position_value = equity` (fail-closed on critical violations).
 
 ## Idempotency
 

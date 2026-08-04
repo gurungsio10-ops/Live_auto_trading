@@ -136,6 +136,7 @@ class PaperSession:
         self.backtest_reports: list[dict[str, Any]] = []
 
         self._persist_task: Any = None
+        self.last_hydrated_at: str | None = None
         self._record_equity_point()
 
     # ------------------------------------------------------------------ market
@@ -1170,6 +1171,9 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
                 paper.risk_engine.state.seen_idempotency_keys.add(order.idempotency_key)
                 if order not in paper.order_history:
                     paper.order_history.append(order)
+    from app.core.time import utc_now as _utc_now
+
+    paper.last_hydrated_at = _utc_now().isoformat()
     return paper
 
 

@@ -19,6 +19,9 @@ environment as production live trading readiness.
 - No leverage, futures, withdrawals, deposits, or wallet signing
 - Every order intent must pass through `app/risk/engine.py` via `OrderGateway`
 - Kill switch and reconciliation halt fail closed
+- CI includes a codebase scan forbidding direct `.create_order(` outside the disabled exchange adapter (`tests/unit/test_security_order_paths.py`)
+- Database errors must not silently invent balances; bootstrap/persist fail closed
+- Durable recovery status is backend SoT (`GET /api/v1/recovery/status`)
 
 ## Secret-management rules
 

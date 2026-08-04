@@ -14,6 +14,7 @@ htmlcov/
 .ruff_cache/
 atlas.db
 *.db
+artifacts/
 node_modules/
 frontend/.next/
 frontend/out/

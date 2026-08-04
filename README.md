@@ -2,78 +2,128 @@
 
 Safe, deterministic, personal cryptocurrency **paper** trading platform.
 
-**Paper mode is the default.** Live money trading is hard-blocked. AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py`).
+**Paper trading is supported. Live money remains disabled.**  
+AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py` via `OrderGateway`).
 
 Banner: **PAPER TRADING — NO REAL FUNDS**
+
+## What works today
+
+- Deterministic paper cycles (offline fixtures by default)
+- Durable paper account / risk / strategy persistence (Alembic **`0006_paper_durable`**)
+- Restart-safe hydration + fail-closed reconciliation
+- Kill switch, cycle locks, processed-cycle idempotency
+- Equity snapshots, journal dual-write, maker/taker fee + stop/TP paper realism
+- Ops dashboard + **Recovery** panel (`/recovery`)
+- PostgreSQL soak harness (`python -m app.cli paper-soak`)
+- 265 automated tests; application coverage gate **≥85%**
 
 ## Architecture
 
 ```text
-Market data → candle validation → EMA(+RSI) strategy → signal → risk engine
-  → paper broker → fill → portfolio (WAC) → journal → /api + /api/v1 → dashboard
+Market data → candle validation → strategy → signal → OrderGateway → RiskEngine
+  → paper engine → PaperSession + journal + dual-write persistence
+  → /api/v1 + dashboard (+ /recovery)
 ```
 
-See `docs/architecture/system_overview.md`, `docs/audit/repository_consolidation_report.md`,
-`docs/audit/final_verification_report.md`, and `SECURITY.md`.
+Authoritative consolidation audit: `docs/audit/pr_consolidation_audit.md`  
+Merge plan: `docs/audit/release_merge_plan.md`  
+Verification: `docs/audit/paper_v1_final_verification.md`
 
-## Quick start (Makefile)
+## Migrations
+
+| Revision | Contents |
+|----------|----------|
+| `0001_phase2` | symbols, candles |
+| `0002_phase9` | journal tables |
+| `0003_users` | users |
+| `0004_paper_slice` | balances, positions, snapshots, system_state, … |
+| `0005_cycle_ops` | cycle_locks, scheduler_runs, reconciliation_reports |
+| `0006_paper_durable` | paper_accounts, risk_state, strategy_state, processed_cycle_keys, equity_snapshots, kill_switch_events |
+
+```bash
+alembic upgrade head
+```
+
+## Persistence model
+
+`PaperSession` is process-local for latency but **hydrated from DB on startup** and dual-written after cycles / control-plane mutations. Startup reconciliation is fail-closed: untrusted durable state pauses trading. See `docs/operations/recovery_runbook.md`.
+
+## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-make setup
-make migrate
-make dev                 # FastAPI on :8000
-# other terminal:
-make frontend-dev        # Next.js on :3000
-make paper-cycle         # one simulated trade cycle
-make test
-make lint
-make typecheck
-```
-
-## Manual setup
-
-```bash
 pip install -e ".[dev]"
 cp .env.example .env
-# Keep TRADING_MODE=paper, TRADING_ENABLED=false, ENABLE_LIVE_TRADING=false
+# Keep TRADING_MODE=paper, ENABLE_LIVE_TRADING=false
 alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Dashboard:
+### PostgreSQL (recommended durable path)
+
+```bash
+docker compose up -d          # Postgres + Redis
+# set DATABASE_URL=postgresql+asyncpg://... in .env
+alembic upgrade head
+```
+
+### Dashboard
 
 ```bash
 cd frontend && npm ci
 ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-Open http://localhost:3000 — login `admin` / `atlas` (dev defaults).
+Open http://localhost:3000 — login `admin` / `atlas` (dev defaults). Recovery panel: `/recovery`.
 
-## Paper cycle (MVP API)
+`ADMIN_API_TOKEN` is used only in Next.js **server** BFF routes — never expose it to browser JS.
+
+## Run one paper cycle
 
 ```bash
-# One-shot cycle (works even when TRADING_ENABLED=false)
-# ADMIN_API_TOKEN comes from .env / .env.example (local-dev placeholder).
-curl -s -X POST http://127.0.0.1:8000/api/trading/cycle \
+curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
   -H 'Content-Type: application/json' \
   -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
-  -d '{"confirm":"RUN_ONE_CYCLE","symbol":"BTC/USDT","timeframe":"5m"}'
-
-# Or enable continuous paper mode, then cycle without one-shot confirm:
-curl -s -X POST http://127.0.0.1:8000/api/trading/start \
-  -H 'Content-Type: application/json' \
-  -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
-  -d '{"confirm":"START_PAPER_TRADING"}'
+  -d '{"confirm":"RUN_ONE_CYCLE","symbol":"BTC/USDT","timeframe":"1m"}'
 ```
 
-Legacy path still works: `POST /api/v1/paper/cycle/run`.
+Or: `make paper-cycle` / dashboard “Run one paper cycle”.
 
-## Docker
+## Soak test (no exchange credentials)
 
 ```bash
-docker compose up -d          # Postgres + Redis
-docker build -t atlas-api .   # optional API image (paper-only env)
+python -m app.cli paper-soak \
+  --duration-hours 24 \
+  --symbols BTC/USDT,ETH/USDT \
+  --restart-interval-minutes 30 \
+  --seed 42
+# CI shortcut:
+python -m app.cli paper-soak --duration-hours 0.01 --seed 42 --max-cycles 6
+```
+
+Artifacts: `artifacts/soak/summary.json`, `events.jsonl`, `equity.csv`, `reconciliation.json`, `invariants.json`.
+
+## Recover from a reconciliation halt
+
+1. Inspect `GET /api/v1/recovery/status` or dashboard `/recovery`
+2. Fix root cause (do not invent balances)
+3. `POST /api/v1/reconciliation/run` (admin) until healthy
+4. `POST /api/v1/reconciliation/clear-halt` with admin token + confirmation  
+   Dashboard clear-halt requires confirm `CLEAR_RECONCILIATION_HALT`
+
+Details: `docs/operations/recovery_runbook.md`.
+
+## Quality gates
+
+```bash
+pytest -q
+pytest --cov=app --cov-report=term-missing --cov-fail-under=85
+ruff check app tests && ruff format --check app tests
+mypy app
+alembic upgrade head
+npm --prefix frontend run lint && npm --prefix frontend run typecheck && npm --prefix frontend run build
+docker compose config
 ```
 
 ## Safety
@@ -85,8 +135,20 @@ docker build -t atlas-api .   # optional API image (paper-only env)
 | `ENABLE_LIVE_TRADING` | `false` |
 | Futures / leverage / withdrawals | blocked by `SafetyGuard` |
 | Live order submission | hard-blocked |
+| AI order execution | not available (advisory only) |
 
-Never commit real API keys. Mutating controls require `ADMIN_API_TOKEN`.
+## Current limitations
+
+- Live money trading is **not** implemented and must stay disabled
+- Futures, leverage >1x, withdrawals unavailable
+- Scheduler off by default (`ENABLE_TRADING_SCHEDULER=false`)
+- Redis optional (not required at startup)
+- Public market data optional; offline fixtures are the default paper path
+- Live readiness checklist: `docs/operations/live_trading_readiness_checklist.md` (all items unchecked)
+
+## Verified test counts
+
+Local verification on the release branch: **265 passed**, coverage **≥85%**. Re-run CI on the PR for the authoritative green check.
 
 ## Troubleshooting
 
@@ -94,5 +156,6 @@ Never commit real API keys. Mutating controls require `ADMIN_API_TOKEN`.
 |---------|-----|
 | `401` on cycle/kill-switch | Set `ADMIN_API_TOKEN` and send `X-Admin-Token` |
 | Yellow “Demo data” banner | Backend unreachable — start uvicorn |
-| `409 TRADING_ENABLED is false` | Pass `confirm=RUN_ONE_CYCLE` or call `/api/trading/start` |
+| `409 TRADING_ENABLED is false` | Pass `confirm=RUN_ONE_CYCLE` or start paper trading |
 | LIVE startup error | Keep `TRADING_MODE=paper` |
+| Trading blocked after restart | Check `/recovery` for recon halt / kill switch / DB unhealthy |

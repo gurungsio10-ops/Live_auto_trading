@@ -18,13 +18,16 @@ DB available?
   └─ refuse new orders while halted / kill switch / unhealthy deps
 ```
 
-## Recovery status API
+## Recovery status API + dashboard
 
 - `GET /api/v1/recovery/status` — durable recovery snapshot (backend SoT)
+- Dashboard **Recovery** page: `frontend/app/recovery` via BFF `GET /api/recovery/status`
+- Panel fields include: runtime mode, trading enabled/paused, kill switch, recon halt, last cycle, last hydration, persistence/DB/scheduler status, stale MD, open orders/positions, equity, latest recon
 - `GET /api/recovery/status` — MVP alias
 - `GET /api/reconciliation/status` — last recon result
 - `POST /api/reconciliation/run` — admin, re-run checks
 - `POST /api/v1/reconciliation/clear-halt` — admin, clear durable halt after fix
+- Dashboard clear-halt BFF requires confirm `CLEAR_RECONCILIATION_HALT` and server-side `ADMIN_API_TOKEN` (never browser-exposed)
 
 ## On reconciliation halt
 
