@@ -217,3 +217,76 @@ class JournalStore:
             )
         )
         await self.session.commit()
+
+    async def list_orders(self, *, limit: int = 500) -> list[Order]:
+        from sqlalchemy import select
+
+        from app.models.domain.enums import OrderSide, OrderStatus, OrderType
+
+        rows = (
+            (
+                await self.session.execute(
+                    select(OrderORM).order_by(OrderORM.created_at.desc()).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        out: list[Order] = []
+        for row in reversed(list(rows)):
+            out.append(
+                Order(
+                    id=row.id,
+                    client_order_id=row.client_order_id,
+                    idempotency_key=row.idempotency_key,
+                    symbol=row.symbol,
+                    side=OrderSide(row.side),
+                    order_type=OrderType(row.order_type),
+                    quantity=Decimal(str(row.quantity)),
+                    filled_quantity=Decimal(str(row.filled_quantity or 0)),
+                    price=Decimal(str(row.price)) if row.price is not None else None,
+                    average_fill_price=(
+                        Decimal(str(row.average_fill_price))
+                        if row.average_fill_price is not None
+                        else None
+                    ),
+                    status=OrderStatus(row.status),
+                    strategy_name=row.strategy_name,
+                    signal_id=row.signal_id,
+                    fees=Decimal(str(row.fees or 0)),
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    metadata=dict(row.payload or {}),
+                )
+            )
+        return out
+
+    async def list_fills(self, *, limit: int = 500) -> list[Fill]:
+        from sqlalchemy import select
+
+        from app.models.domain.enums import OrderSide
+
+        rows = (
+            (
+                await self.session.execute(
+                    select(FillORM).order_by(FillORM.timestamp.desc()).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        out: list[Fill] = []
+        for row in reversed(list(rows)):
+            out.append(
+                Fill(
+                    id=row.id,
+                    order_id=row.order_id,
+                    symbol=row.symbol,
+                    side=OrderSide(row.side),
+                    quantity=Decimal(str(row.quantity)),
+                    price=Decimal(str(row.price)),
+                    fee=Decimal(str(row.fee)),
+                    timestamp=row.timestamp,
+                )
+            )
+        return out

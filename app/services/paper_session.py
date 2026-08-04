@@ -268,11 +268,17 @@ class PaperSession:
         )
 
     def _risk_context(self, symbol: str) -> RiskContext:
+        from app.services.market_sources import last_market_data_ts
+        from app.services.reconciliation import is_reconciliation_healthy
+
+        md_ts = last_market_data_ts() or utc_now()
+        self.risk_engine.state.last_market_data_ts = md_ts
+        self.risk_engine.state.reconciliation_healthy = is_reconciliation_healthy()
         return RiskContext(
             portfolio=self._portfolio_state(),
             symbol_info=None,
             mark_price=self._mark(symbol),
-            market_data_ts=utc_now(),
+            market_data_ts=md_ts,
             trading_mode=self.settings.trading_mode,
             live_trading_enabled=self.settings.live_trading_enabled,
             kill_switch_enabled=self.kill_switch_enabled,
@@ -952,7 +958,8 @@ def reset_paper_session() -> PaperSession:
 
 
 async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
-    """Load durable kill-switch + portfolio checkpoint into the process session."""
+    """Load durable kill-switch + portfolio checkpoint + order/fill ledger."""
+    from app.journal.store import JournalStore
     from app.services import paper_persistence as store
 
     paper = get_paper_session()
@@ -980,6 +987,22 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
         for symbol, pos in paper.paper.state.positions.items():
             paper.paper.set_mark_price(symbol, pos.current_price)
         paper._record_equity_point()
+
+    # Hydrate order/fill ledger from journal tables when present.
+    try:
+        journal = JournalStore(session)
+        orders = await journal.list_orders(limit=500)
+        fills = await journal.list_fills(limit=500)
+        for order in orders:
+            paper.paper.state.orders[order.id] = order
+            paper.paper.state.idempotency_index[order.idempotency_key] = order.id
+            if order not in paper.order_history:
+                paper.order_history.append(order)
+        if fills:
+            paper.paper.state.fills = list(fills)
+    except Exception:
+        # Older DBs without journal tables still boot from checkpoint.
+        pass
     return paper
 
 

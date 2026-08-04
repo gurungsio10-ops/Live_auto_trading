@@ -84,6 +84,23 @@ class Settings(BaseSettings):
     )
     webhook_alert_url: str | None = None
 
+    # Production paper/testnet runtime controls (live money remains hard-blocked).
+    use_live_market_data: bool = Field(
+        default=False, validation_alias="USE_LIVE_MARKET_DATA"
+    )
+    enable_trading_scheduler: bool = Field(
+        default=False, validation_alias="ENABLE_TRADING_SCHEDULER"
+    )
+    paper_cycle_interval_seconds: int = Field(
+        default=60, ge=5, validation_alias="PAPER_CYCLE_INTERVAL_SECONDS"
+    )
+    enable_reconciliation: bool = Field(
+        default=True, validation_alias="ENABLE_RECONCILIATION"
+    )
+    reconciliation_interval_seconds: int = Field(
+        default=120, ge=30, validation_alias="RECONCILIATION_INTERVAL_SECONDS"
+    )
+
     # Paper execution (env-driven; Decimal only)
     paper_starting_balance: Decimal = Field(
         default=Decimal("10000"),

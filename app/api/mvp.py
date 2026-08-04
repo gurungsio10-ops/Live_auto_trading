@@ -320,9 +320,15 @@ async def trading_start(body: ConfirmBody, _: AdminAuthDep) -> dict[str, Any]:
         )
     get_safety_guard().assert_paper_only()
     set_trading_enabled(True)
+    from app.services.trading_scheduler import scheduler_status, start_scheduler
+
+    # Enable continuous cycles when operator starts paper trading.
+    get_settings().enable_trading_scheduler = True
+    start_scheduler()
     return {
         "trading_enabled": True,
         "mode": "paper",
+        "scheduler": scheduler_status(),
         "banner": "PAPER TRADING — NO REAL FUNDS",
     }
 

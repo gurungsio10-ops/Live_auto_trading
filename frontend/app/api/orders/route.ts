@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminHeaders, backendFetch, envelope } from "@/lib/backend";
-import { demoState } from "@/lib/mock-data";
 import type { Order, OrderTicketPayload } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -20,17 +19,9 @@ export async function GET(req: NextRequest) {
     const data = await backendFetch<Order[]>(path);
     return NextResponse.json(envelope(data, false));
   } catch (err) {
-    let orders = [...demoState.orders];
-    if (status) orders = orders.filter((o) => o.status === status);
-    if (symbol) {
-      const s = symbol.toUpperCase();
-      orders = orders.filter((o) => o.symbol.toUpperCase().includes(s));
-    }
-    if (date) {
-      orders = orders.filter((o) => o.created_at.slice(0, 10) === date);
-    }
     return NextResponse.json(
-      envelope(orders, true, err instanceof Error ? err.message : "backend down"),
+      envelope([], false, err instanceof Error ? err.message : "backend down"),
+      { status: 503 },
     );
   }
 }

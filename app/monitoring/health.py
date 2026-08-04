@@ -60,7 +60,7 @@ class ConsoleAlertChannel:
 
 
 class WebhookAlertChannel:
-    """Interface only — no real credentials required."""
+    """Posts JSON alerts when WEBHOOK_ALERT_URL is configured."""
 
     def __init__(self, url: str | None = None) -> None:
         self.url = url
@@ -76,7 +76,16 @@ class WebhookAlertChannel:
             "ts": utc_now().isoformat(),
         }
         self.sent.append(body)
-        # Intentionally does not perform HTTP unless url set and httpx used by caller later.
+        if not self.url:
+            return
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(self.url, json=body)
+        except Exception:
+            # Never crash trading path on alert delivery failure.
+            pass
 
 
 @dataclass
