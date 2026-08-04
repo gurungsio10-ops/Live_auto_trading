@@ -1,10 +1,10 @@
 # PR #27 — Human Merge & Close Checklist
 
-**Authoritative tip:** `cursor/release-paper-v1-consolidated-e3a2` @ verify via `gh pr view 27`  
+**Authoritative tip:** `cursor/release-paper-v1-consolidated-e3a2` @ `51a1dc4` (re-verify via `gh pr view 27`)  
 **PR:** https://github.com/gurungsio10-ops/Live_auto_trading/pull/27 → `main`  
 **Constraint:** PAPER ONLY — do not enable live money, futures, leverage >1x, withdrawals, or autonomous AI execution.
 
-Verified at last agent pass: `MERGEABLE`, `mergeStateStatus=CLEAN`, CI jobs `backend` / `frontend` / `secret-scan` / `docker-compose-validate` all `SUCCESS`.
+Verified at last agent pass: `MERGEABLE`, `mergeStateStatus=CLEAN`, CI jobs `backend` / `frontend` / `secret-scan` / `docker-compose-validate` all `SUCCESS` on `51a1dc4`.
 
 ---
 
