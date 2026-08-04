@@ -59,6 +59,14 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
         ),
         "timeframe": "1m",
     },
+    "ema_rsi": {
+        "governance_status": "PAPER",
+        "description": (
+            "EMA crossover with RSI>50 confirmation and percent stop/target. "
+            "Paper MVP baseline — not marketed as profitable."
+        ),
+        "timeframe": "5m",
+    },
     "ema_trend": {
         "governance_status": "PAPER",
         "description": "Dual EMA crossover with ATR-based stops. Deterministic, no LLM in path.",

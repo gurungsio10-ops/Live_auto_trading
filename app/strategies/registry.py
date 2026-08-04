@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.strategies.base import Strategy
 from app.strategies.breakout import BreakoutStrategy
 from app.strategies.ema_crossover import EMACrossoverStrategy
+from app.strategies.ema_rsi import EMARSIStrategy
 from app.strategies.ema_trend import EMATrendStrategy
 from app.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
 
@@ -28,6 +29,7 @@ def list_strategies() -> list[Strategy]:
 def bootstrap_default_strategies() -> None:
     defaults: list[Strategy] = [
         EMACrossoverStrategy(),
+        EMARSIStrategy(),
         EMATrendStrategy(),
         RSIMeanReversionStrategy(),
         BreakoutStrategy(),

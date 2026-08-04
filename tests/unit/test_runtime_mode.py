@@ -6,7 +6,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.core.config import Settings
-from app.core.errors import ConfigurationError, LiveTradingDisabledError
+from app.core.errors import LiveTradingDisabledError
 from app.core.runtime_mode import (
     RuntimeMode,
     derive_runtime_mode,
@@ -69,7 +69,7 @@ def test_live_hard_blocked_even_with_all_gates():
         s.assert_startup_safe()
 
 
-def test_live_incomplete_gates_configuration_error():
+def test_live_incomplete_gates_still_hard_blocked():
     s = Settings(
         trading_mode="live",
         exchange_env="live",
@@ -77,7 +77,7 @@ def test_live_incomplete_gates_configuration_error():
         atlas_runtime_mode="LIVE",
         _env_file=None,
     )
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(LiveTradingDisabledError):
         s.assert_startup_safe()
 
 

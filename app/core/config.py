@@ -42,8 +42,13 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("ENABLE_LIVE_TRADING", "LIVE_TRADING_ENABLED"),
     )
+    # Paper automation gate (false = cycles require explicit one-shot confirm).
+    trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
     kill_switch_enabled: bool = False
-    exchange_env: ExchangeEnv = "paper"
+    exchange_env: ExchangeEnv = Field(
+        default="paper",
+        validation_alias=AliasChoices("EXCHANGE_ENV", "EXCHANGE_TESTNET"),
+    )
     live_approval_token: SecretStr | None = None
     # Explicit acknowledgement required before any LIVE start attempt.
     live_startup_ack: str = Field(default="", validation_alias="LIVE_STARTUP_ACK")
@@ -57,7 +62,10 @@ class Settings(BaseSettings):
         default=None, validation_alias="ADMIN_API_TOKEN"
     )
 
-    exchange_id: str = "binance"
+    exchange_id: str = Field(
+        default="bybit",
+        validation_alias=AliasChoices("EXCHANGE_ID", "EXCHANGE_NAME"),
+    )
     exchange_api_key: SecretStr | None = None
     exchange_api_secret: SecretStr | None = None
 
@@ -78,7 +86,8 @@ class Settings(BaseSettings):
 
     # Paper execution (env-driven; Decimal only)
     paper_starting_balance: Decimal = Field(
-        default=Decimal("10000"), validation_alias="PAPER_STARTING_BALANCE"
+        default=Decimal("10000"),
+        validation_alias=AliasChoices("PAPER_STARTING_BALANCE", "STARTING_BALANCE"),
     )
     paper_fee_bps: Decimal = Field(
         default=Decimal("10"), validation_alias="PAPER_FEE_BPS"
@@ -89,10 +98,16 @@ class Settings(BaseSettings):
 
     # Risk defaults (fractions: 0.01 = 1%). Percent env aliases accepted.
     max_risk_per_trade: Decimal = Field(
-        default=Decimal("0.01"), validation_alias="RISK_PER_TRADE_PERCENT"
+        default=Decimal("0.01"),
+        validation_alias=AliasChoices(
+            "RISK_PER_TRADE_PERCENT", "MAX_POSITION_RISK_PERCENT"
+        ),
     )
     max_position_exposure: Decimal = Field(
-        default=Decimal("0.25"), validation_alias="MAX_POSITION_PERCENT"
+        default=Decimal("0.20"),
+        validation_alias=AliasChoices(
+            "MAX_POSITION_PERCENT", "MAX_POSITION_SIZE_PERCENT"
+        ),
     )
     max_portfolio_exposure: Decimal = Decimal("0.80")
     max_open_positions: int = Field(default=3, validation_alias="MAX_OPEN_POSITIONS")
@@ -108,9 +123,23 @@ class Settings(BaseSettings):
     default_leverage: Decimal = Decimal("1")
 
     supported_symbols: tuple[str, ...] = Field(
-        default=("BTC/USDT",), validation_alias="ALLOWED_SYMBOLS"
+        default=("BTC/USDT",),
+        validation_alias="ALLOWED_SYMBOLS",
     )
     supported_timeframes: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
+    default_symbol: str = Field(default="BTC/USDT", validation_alias="DEFAULT_SYMBOL")
+    default_timeframe: str = Field(default="5m", validation_alias="DEFAULT_TIMEFRAME")
+
+    # Baseline EMA+RSI strategy env knobs
+    fast_ema_period: int = Field(default=9, ge=1, validation_alias="FAST_EMA_PERIOD")
+    slow_ema_period: int = Field(default=21, ge=2, validation_alias="SLOW_EMA_PERIOD")
+    rsi_period: int = Field(default=14, ge=2, validation_alias="RSI_PERIOD")
+    stop_loss_percent: Decimal = Field(
+        default=Decimal("1"), validation_alias="STOP_LOSS_PERCENT"
+    )
+    take_profit_percent: Decimal = Field(
+        default=Decimal("2"), validation_alias="TAKE_PROFIT_PERCENT"
+    )
 
     @field_validator("trading_mode", mode="before")
     @classmethod
@@ -128,10 +157,15 @@ class Settings(BaseSettings):
     def _normalize_exchange_env(cls, value: object) -> str:
         if value is None or str(value).strip() == "":
             return "paper"
-        normalized = str(value).lower().strip()
-        if normalized not in {"paper", "testnet", "live", "backtest"}:
+        raw = str(value).lower().strip()
+        # EXCHANGE_TESTNET=true|false alias
+        if raw in {"true", "1", "yes"}:
+            return "testnet"
+        if raw in {"false", "0", "no"}:
             return "paper"
-        return normalized
+        if raw not in {"paper", "testnet", "live", "backtest"}:
+            return "paper"
+        return raw
 
     @field_validator("atlas_runtime_mode", mode="before")
     @classmethod
@@ -150,6 +184,8 @@ class Settings(BaseSettings):
         "max_drawdown",
         "min_order_notional",
         "default_leverage",
+        "stop_loss_percent",
+        "take_profit_percent",
         mode="before",
     )
     @classmethod
@@ -181,12 +217,15 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _normalize_percent_or_fraction(cls, value: Decimal) -> Decimal:
-        """Accept either fraction (0.01) or whole percent (1 → 0.01, 25 → 0.25)."""
+        """Accept fraction (0.01) or whole percent points (1 → 0.01, 20 → 0.20).
+
+        Bare ``1`` is treated as 1% (not 100%) to match MVP env examples.
+        """
         if value < 0:
             raise ValueError("risk percentages must be non-negative")
-        if value > 1:
-            if value > 100:
-                raise ValueError("risk percentage out of range")
+        if value > 100:
+            raise ValueError("risk percentage out of range")
+        if value >= 1:
             return value / Decimal("100")
         return value
 
@@ -200,6 +239,21 @@ class Settings(BaseSettings):
             raise ConfigurationError(
                 "default_leverage must be 1 — leverage is not supported"
             )
+        if self.fast_ema_period >= self.slow_ema_period:
+            raise ConfigurationError("FAST_EMA_PERIOD must be < SLOW_EMA_PERIOD")
+        if self.stop_loss_percent <= 0 or self.take_profit_percent <= 0:
+            raise ConfigurationError(
+                "STOP_LOSS_PERCENT and TAKE_PROFIT_PERCENT must be > 0"
+            )
+        # Keep allowlist in sync with default symbol.
+        if self.default_symbol and self.default_symbol not in self.supported_symbols:
+            self.supported_symbols = tuple(
+                dict.fromkeys([*self.supported_symbols, self.default_symbol])
+            )
+        if self.default_timeframe not in self.supported_timeframes:
+            raise ConfigurationError(
+                f"DEFAULT_TIMEFRAME={self.default_timeframe!r} not in supported timeframes"
+            )
         return self
 
     def assert_startup_safe(self) -> None:
@@ -209,28 +263,11 @@ class Settings(BaseSettings):
         LIVE remains hard-blocked in this development phase even when
         ENABLE_LIVE_TRADING, credentials, and LIVE_STARTUP_ACK are set.
         """
+        from app.core.safety import SafetyGuard
+
+        SafetyGuard(self).assert_paper_only()
         mode = self.runtime_mode
         if mode == RuntimeMode.LIVE or self.exchange_env == "live":
-            token = (
-                self.live_approval_token.get_secret_value()
-                if self.live_approval_token
-                else ""
-            )
-            ack = (self.live_startup_ack or "").strip()
-            gates_ok = (
-                self.live_trading_enabled
-                and self.has_exchange_credentials
-                and bool(token.strip())
-                and ack == "I_UNDERSTAND_LIVE_TRADING_RISKS"
-                and not self.kill_switch_enabled
-            )
-            if not gates_ok:
-                raise ConfigurationError(
-                    "LIVE mode rejected: require ENABLE_LIVE_TRADING=true, "
-                    "exchange credentials, LIVE_APPROVAL_TOKEN, "
-                    "LIVE_STARTUP_ACK=I_UNDERSTAND_LIVE_TRADING_RISKS, "
-                    "and kill switch off. Default remains PAPER."
-                )
             raise LiveTradingDisabledError(
                 "LIVE execution is hard-disabled in this development phase. "
                 "Keep ATLAS_RUNTIME_MODE=PAPER (or TESTNET) and "

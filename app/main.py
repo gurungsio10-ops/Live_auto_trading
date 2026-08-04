@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
+from app.api.mvp import router as mvp_router
 from app.api.routes import router as api_router
 from app.api.v1 import router as v1_router
 from app.core.config import get_settings
@@ -70,7 +71,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(api_router, prefix="/api")
+app.include_router(mvp_router, prefix="/api")
 app.include_router(v1_router, prefix="/api/v1")
+# Root-level endpoints matching the Next.js proxy contract.
 app.include_router(auth_router)
 app.include_router(dashboard_router)
 
