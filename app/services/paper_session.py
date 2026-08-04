@@ -656,6 +656,12 @@ class PaperSession:
                     try:
                         async with factory() as session:
                             await store.save_kill_switch(session, enabled=enabled)
+                            await store.record_kill_switch_event(
+                                session,
+                                enabled=enabled,
+                                reason=("activated" if enabled else "deactivated"),
+                                payload={"source": "set_kill_switch"},
+                            )
                             await store.append_audit_event(
                                 session,
                                 event_type="KILL_SWITCH",
@@ -1031,9 +1037,10 @@ def reset_paper_session() -> PaperSession:
 
 
 async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
-    """Load durable kill-switch + portfolio checkpoint + order/fill ledger."""
+    """Load durable kill-switch + portfolio + risk/strategy + order/fill ledger."""
     from app.journal.store import JournalStore
     from app.services import paper_persistence as store
+    from app.services import reconciliation as recon
 
     paper = get_paper_session()
     kill = await store.load_kill_switch(session)
@@ -1047,15 +1054,20 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
         paper.trading_paused = trading_paused
     halt = await store.load_reconciliation_halt(session)
     if halt is not None:
-        paper.risk_engine.state.reconciliation_healthy = not bool(halt.get("halted"))
+        halted = bool(halt.get("halted"))
+        paper.risk_engine.state.reconciliation_healthy = not halted
+        recon.apply_halt_from_storage(halted=halted)
 
     checkpoint = await store.load_paper_checkpoint(session)
+    account = await store.load_paper_account(session)
     if checkpoint:
         cash = Decimal(str(checkpoint.get("cash", paper.paper.state.cash)))
         paper.paper.state.cash = cash
         paper._peak_equity = Decimal(
             str(checkpoint.get("peak_equity", paper._peak_equity))
         )
+        if checkpoint.get("daily_start_equity") is not None:
+            paper._daily_start_equity = Decimal(str(checkpoint["daily_start_equity"]))
         paper._consecutive_losses = int(checkpoint.get("consecutive_losses") or 0)
         paper.paper.state.realized_pnl = Decimal(
             str(checkpoint.get("realized_pnl") or "0")
@@ -1069,6 +1081,62 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
         for symbol, pos in paper.paper.state.positions.items():
             paper.paper.set_mark_price(symbol, pos.current_price)
         paper._record_equity_point()
+    elif account is not None:
+        # First-class account row when checkpoint JSON is absent.
+        paper.paper.state.cash = Decimal(str(account["cash"]))
+        paper.paper.state.realized_pnl = Decimal(str(account["realized_pnl"]))
+        paper._peak_equity = Decimal(str(account["peak_equity"]))
+        paper._daily_start_equity = Decimal(str(account["daily_start_equity"]))
+        paper._consecutive_losses = int(account["consecutive_losses"] or 0)
+        idx = account.get("idempotency_index") or {}
+        if isinstance(idx, dict):
+            paper.paper.state.idempotency_index = {
+                str(k): str(v) for k, v in idx.items()
+            }
+        paper._record_equity_point()
+
+    risk_state = await store.load_risk_state(session)
+    if risk_state is not None:
+        rs = paper.risk_engine.state
+        rs.circuit_breaker_open = bool(risk_state["circuit_breaker_open"])
+        rs.circuit_breaker_reason = str(risk_state.get("circuit_breaker_reason") or "")
+        rs.seen_idempotency_keys = {
+            str(k) for k in (risk_state.get("seen_idempotency_keys") or [])
+        }
+        rs.reconciliation_healthy = bool(risk_state["reconciliation_healthy"])
+        rs.risk_engine_healthy = bool(risk_state["risk_engine_healthy"])
+        rs.database_healthy = bool(risk_state["database_healthy"])
+        rs.market_data_healthy = bool(risk_state["market_data_healthy"])
+        paper._peak_equity = Decimal(
+            str(risk_state["peak_equity"] or paper._peak_equity)
+        )
+        paper._daily_start_equity = Decimal(
+            str(risk_state["daily_start_equity"] or paper._daily_start_equity)
+        )
+        paper._consecutive_losses = int(
+            risk_state.get("consecutive_losses") or paper._consecutive_losses
+        )
+        if risk_state.get("kill_switch_enabled"):
+            paper.kill_switch_enabled = True
+
+    # Seed risk seen-keys from order idempotency index when risk_state empty.
+    if not paper.risk_engine.state.seen_idempotency_keys:
+        paper.risk_engine.state.seen_idempotency_keys = set(
+            paper.paper.state.idempotency_index.keys()
+        )
+
+    strategy_state = await store.load_strategy_state(session)
+    if strategy_state is not None:
+        paper.selected_strategy_id = strategy_state.get("selected_strategy_id")
+        paper.running_strategies = {
+            str(s) for s in (strategy_state.get("running_strategies") or [])
+        }
+        overrides = strategy_state.get("param_overrides") or {}
+        if isinstance(overrides, dict):
+            paper.param_overrides = {
+                str(k): dict(v) if isinstance(v, dict) else {}
+                for k, v in overrides.items()
+            }
 
     # Hydrate order/fill ledger from journal tables when present.
     try:
@@ -1078,6 +1146,7 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
         for order in orders:
             paper.paper.state.orders[order.id] = order
             paper.paper.state.idempotency_index[order.idempotency_key] = order.id
+            paper.risk_engine.state.seen_idempotency_keys.add(order.idempotency_key)
             if order not in paper.order_history:
                 paper.order_history.append(order)
         if fills:
@@ -1086,19 +1155,28 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
         # Older DBs without journal tables still boot from checkpoint.
         pass
 
-    # Fallback: restore fills from checkpoint so restart recon stays coherent
-    # when journal rows were never written (offline cycle without JournalStore).
-    if not paper.paper.state.fills and checkpoint:
-        restored_fills = store.checkpoint_to_fills(checkpoint)
-        if restored_fills:
-            paper.paper.state.fills = list(restored_fills)
+    # Fallback: restore fills/orders from checkpoint so restart recon and
+    # idempotency stay coherent when journal rows were never written.
+    if checkpoint:
+        if not paper.paper.state.fills:
+            restored_fills = store.checkpoint_to_fills(checkpoint)
+            if restored_fills:
+                paper.paper.state.fills = list(restored_fills)
+        if not paper.paper.state.orders:
+            restored_orders = store.checkpoint_to_orders(checkpoint)
+            for order_id, order in restored_orders.items():
+                paper.paper.state.orders[order_id] = order
+                paper.paper.state.idempotency_index[order.idempotency_key] = order_id
+                paper.risk_engine.state.seen_idempotency_keys.add(order.idempotency_key)
+                if order not in paper.order_history:
+                    paper.order_history.append(order)
     return paper
 
 
 async def persist_paper_session(
     session: Any, *, correlation_id: str | None = None
 ) -> None:
-    """Write kill switch + portfolio checkpoint to the database."""
+    """Write kill switch + portfolio + risk/strategy durable state."""
     from app.services import paper_persistence as store
 
     paper = get_paper_session()
@@ -1106,6 +1184,15 @@ async def persist_paper_session(
     await store.save_trading_enabled(session, enabled=paper.trading_enabled)
     await store.save_trading_paused(session, paused=paper.trading_paused)
     fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
+    equity = paper.paper.state.cash + sum(
+        (p.quantity * p.current_price for p in paper.paper.state.positions.values()),
+        Decimal("0"),
+    )
+    drawdown = (
+        (paper._peak_equity - equity) / paper._peak_equity
+        if paper._peak_equity > 0
+        else Decimal("0")
+    )
     await store.save_paper_checkpoint(
         session,
         cash=paper.paper.state.cash,
@@ -1115,19 +1202,60 @@ async def persist_paper_session(
         consecutive_losses=paper._consecutive_losses,
         idempotency_index=dict(paper.paper.state.idempotency_index),
         fees_paid=fees,
+        daily_start_equity=paper._daily_start_equity,
         correlation_id=correlation_id,
         fills=list(paper.paper.state.fills),
+        orders=dict(paper.paper.state.orders),
+    )
+    await store.save_paper_account(
+        session,
+        cash=paper.paper.state.cash,
+        realized_pnl=paper.paper.state.realized_pnl,
+        peak_equity=paper._peak_equity,
+        daily_start_equity=paper._daily_start_equity,
+        consecutive_losses=paper._consecutive_losses,
+        fees_paid=fees,
+        idempotency_index=dict(paper.paper.state.idempotency_index),
+    )
+    rs = paper.risk_engine.state
+    await store.save_risk_state(
+        session,
+        circuit_breaker_open=rs.circuit_breaker_open,
+        circuit_breaker_reason=rs.circuit_breaker_reason,
+        seen_idempotency_keys=list(rs.seen_idempotency_keys),
+        reconciliation_healthy=rs.reconciliation_healthy,
+        risk_engine_healthy=rs.risk_engine_healthy,
+        database_healthy=rs.database_healthy,
+        market_data_healthy=rs.market_data_healthy,
+        peak_equity=paper._peak_equity,
+        daily_start_equity=paper._daily_start_equity,
+        consecutive_losses=paper._consecutive_losses,
+        kill_switch_enabled=paper.kill_switch_enabled,
+    )
+    await store.save_strategy_state(
+        session,
+        selected_strategy_id=paper.selected_strategy_id,
+        running_strategies=list(paper.running_strategies),
+        param_overrides=dict(paper.param_overrides),
+    )
+    await store.save_equity_snapshot(
+        session,
+        equity=equity,
+        cash=paper.paper.state.cash,
+        drawdown=drawdown,
     )
 
 
 async def bootstrap_paper_runtime() -> None:
-    """Startup: open DB session and hydrate paper state (best-effort)."""
+    """Startup: hydrate durable state and reconcile; fail closed on recon errors."""
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from app.core.logging import get_logger
     from app.db.base import Base, create_engine
     from app.services import cycle_lock as _cycle_lock_models  # noqa: F401
     from app.services import paper_cycle
 
+    log = get_logger("paper.bootstrap")
     engine = create_engine()
     try:
         async with engine.begin() as conn:
@@ -1146,13 +1274,38 @@ async def bootstrap_paper_runtime() -> None:
             from app.services.reconciliation import run_paper_reconciliation
 
             await run_paper_reconciliation(persist=True)
-        except Exception:
-            pass
-    except Exception:
-        # Paper trading can still run in-memory if DB is unavailable.
-        from app.core.logging import get_logger
+        except Exception as exc:
+            paper = get_paper_session()
+            paper.risk_engine.state.reconciliation_healthy = False
+            paper.trading_paused = True
+            from app.services import reconciliation as recon
 
-        get_logger("paper.bootstrap").warning(
+            recon.apply_halt_from_storage(halted=True)
+            recon._STATE["last_result"] = {
+                "healthy": False,
+                "detail": f"startup reconciliation failed: {type(exc).__name__}",
+            }
+            log.error(
+                "paper_bootstrap_reconciliation_failed",
+                extra={"error": type(exc).__name__},
+            )
+            try:
+                async with factory() as session:
+                    from app.services import paper_persistence as store
+
+                    await store.save_reconciliation_halt(
+                        session,
+                        halted=True,
+                        detail=f"startup reconciliation failed: {type(exc).__name__}",
+                    )
+                    await store.save_trading_paused(session, paused=True)
+            except Exception:
+                log.warning("paper_bootstrap_halt_persist_failed")
+    except Exception:
+        # DB unavailable: keep in-memory session but mark database unhealthy.
+        paper = get_paper_session()
+        paper.risk_engine.state.database_healthy = False
+        log.warning(
             "paper_bootstrap_failed",
             extra={"detail": "continuing with in-memory paper session"},
         )

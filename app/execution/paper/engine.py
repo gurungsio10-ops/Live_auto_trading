@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
 from uuid import uuid4
 
 from app.core.time import utc_now
-from app.models.domain.enums import OrderSide, OrderStatus, OrderType, RiskDecision
+from app.models.domain.enums import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RiskDecision,
+    RiskReasonCode,
+)
 from app.models.domain.trading import (
     Fill,
     Order,
@@ -23,9 +31,18 @@ from app.models.domain.trading import (
 class PaperConfig:
     initial_cash: Decimal = Decimal("10000")
     fee_rate: Decimal = Decimal("0.001")
+    """Legacy single fee rate (used when maker/taker not set)."""
+    maker_fee_rate: Decimal | None = None
+    taker_fee_rate: Decimal | None = None
     slippage_rate: Decimal = Decimal("0.0005")
     spread_rate: Decimal = Decimal("0.0002")
     partial_fill_fraction: Decimal = Decimal("1")  # 1 = always full fill
+    latency_ms: int = 0
+    """Simulated submit latency; 0 keeps tests deterministic and fast."""
+    reject_probability: Decimal = Decimal("0")
+    """Optional liquidity-reject probability (0 = never; tests keep 0)."""
+    seed: int | None = None
+    """Deterministic RNG seed for rejection / partial-fill jitter."""
     mark_prices: dict[str, Decimal] = field(default_factory=dict)
 
 
@@ -46,6 +63,7 @@ class PaperTradingEngine:
     def __init__(self, config: PaperConfig | None = None) -> None:
         self.config = config or PaperConfig()
         self.state = PaperState(cash=self.config.initial_cash)
+        self._rng = random.Random(self.config.seed)
 
     def set_mark_price(self, symbol: str, price: Decimal) -> None:
         self.config.mark_prices[symbol] = price
@@ -55,12 +73,24 @@ class PaperTradingEngine:
             self.state.positions[symbol] = pos.model_copy(
                 update={"current_price": price, "unrealized_pnl": unrealized}
             )
+        # Attempt resting stop / take-profit / limit triggers on mark updates.
+        self._try_trigger_resting(symbol, price)
+
+    def _fee_rate(self, *, is_maker: bool) -> Decimal:
+        if is_maker and self.config.maker_fee_rate is not None:
+            return self.config.maker_fee_rate
+        if not is_maker and self.config.taker_fee_rate is not None:
+            return self.config.taker_fee_rate
+        return self.config.fee_rate
 
     async def submit(self, request: OrderRequest, risk: RiskEvaluation) -> Order:
         # Idempotency: return existing order for same key
         if request.idempotency_key in self.state.idempotency_index:
             existing_id = self.state.idempotency_index[request.idempotency_key]
             return self.state.orders[existing_id]
+
+        if self.config.latency_ms > 0:
+            await asyncio.sleep(self.config.latency_ms / 1000.0)
 
         now = utc_now()
         order_id = uuid4().hex
@@ -91,6 +121,16 @@ class PaperTradingEngine:
         order = self._update(order, status=OrderStatus.APPROVED, risk=risk)
         order = self._update(order, status=OrderStatus.SUBMITTED, risk=risk)
 
+        # Optional insufficient-liquidity simulation (default off).
+        if self.config.reject_probability > 0:
+            if Decimal(str(self._rng.random())) < self.config.reject_probability:
+                return self._update(
+                    order,
+                    status=OrderStatus.REJECTED,
+                    risk=risk,
+                    extra={"error": "insufficient_liquidity"},
+                )
+
         mark = self.config.mark_prices.get(request.symbol)
         if (
             mark is None
@@ -98,6 +138,12 @@ class PaperTradingEngine:
             and request.price is not None
         ):
             mark = request.price
+        if mark is None and request.order_type in (
+            OrderType.STOP_LOSS,
+            OrderType.TAKE_PROFIT,
+        ):
+            # Rest until mark is known.
+            return order
         if mark is None:
             return self._update(
                 order, status=OrderStatus.FAILED, risk=risk, extra={"error": "no mark"}
@@ -110,6 +156,109 @@ class PaperTradingEngine:
             if request.side == OrderSide.SELL and mark < request.price:
                 return order
 
+        if request.order_type == OrderType.STOP_LOSS:
+            trigger = request.price or request.stop_loss
+            if trigger is None:
+                return self._update(
+                    order,
+                    status=OrderStatus.REJECTED,
+                    risk=risk,
+                    extra={"error": "no_stop_trigger"},
+                )
+            # Sell stop triggers when mark <= trigger; buy stop when mark >= trigger.
+            if request.side == OrderSide.SELL and mark > trigger:
+                return order
+            if request.side == OrderSide.BUY and mark < trigger:
+                return order
+
+        if request.order_type == OrderType.TAKE_PROFIT:
+            trigger = request.price or request.take_profit
+            if trigger is None:
+                return self._update(
+                    order,
+                    status=OrderStatus.REJECTED,
+                    risk=risk,
+                    extra={"error": "no_tp_trigger"},
+                )
+            if request.side == OrderSide.SELL and mark < trigger:
+                return order
+            if request.side == OrderSide.BUY and mark > trigger:
+                return order
+
+        return self._execute_fill(order, request, risk, mark)
+
+    def _try_trigger_resting(self, symbol: str, mark: Decimal) -> None:
+        """Fill resting limit/stop/tp orders when mark crosses (sync path)."""
+        for order in list(self.state.orders.values()):
+            if order.symbol != symbol:
+                continue
+            if order.status not in (
+                OrderStatus.SUBMITTED,
+                OrderStatus.PARTIALLY_FILLED,
+            ):
+                continue
+            remaining = order.quantity - order.filled_quantity
+            if remaining <= 0:
+                continue
+            price = order.price
+            if order.order_type == OrderType.LIMIT and price is not None:
+                if order.side == OrderSide.BUY and mark > price:
+                    continue
+                if order.side == OrderSide.SELL and mark < price:
+                    continue
+            elif order.order_type == OrderType.STOP_LOSS and price is not None:
+                if order.side == OrderSide.SELL and mark > price:
+                    continue
+                if order.side == OrderSide.BUY and mark < price:
+                    continue
+            elif order.order_type == OrderType.TAKE_PROFIT and price is not None:
+                if order.side == OrderSide.SELL and mark < price:
+                    continue
+                if order.side == OrderSide.BUY and mark > price:
+                    continue
+            else:
+                continue
+            # Build a synthetic request for fee/slippage path.
+            risk = RiskEvaluation(
+                decision=order.risk_decision or RiskDecision.APPROVED,
+                reason_code=order.risk_reason_code or RiskReasonCode.OK,
+                approved_quantity=remaining,
+                message="resting_trigger",
+            )
+            request = OrderRequest(
+                symbol=order.symbol,
+                side=order.side,
+                order_type=order.order_type,
+                quantity=remaining,
+                price=order.price,
+                strategy_name=order.strategy_name,
+                idempotency_key=f"resting-{order.id}-{order.filled_quantity}",
+            )
+            # Bypass idempotency index for resting continuation.
+            fill_price = self._fill_price(mark, request)
+            is_maker = order.order_type == OrderType.LIMIT
+            fill_qty = remaining
+            if self.config.partial_fill_fraction < 1:
+                fill_qty = (remaining * self.config.partial_fill_fraction).quantize(
+                    Decimal("0.00000001"), rounding=ROUND_DOWN
+                )
+            if fill_qty <= 0:
+                continue
+            updated = self._apply_fill(
+                order, fill_qty, fill_price, risk, is_maker=is_maker
+            )
+            if fill_qty < remaining:
+                self._update(updated, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
+            else:
+                self._update(updated, status=OrderStatus.FILLED, risk=risk)
+
+    def _execute_fill(
+        self,
+        order: Order,
+        request: OrderRequest,
+        risk: RiskEvaluation,
+        mark: Decimal,
+    ) -> Order:
         fill_price = self._fill_price(mark, request)
         fill_qty = (request.quantity * self.config.partial_fill_fraction).quantize(
             Decimal("0.00000001"), rounding=ROUND_DOWN
@@ -117,17 +266,27 @@ class PaperTradingEngine:
         if fill_qty <= 0:
             return self._update(order, status=OrderStatus.FAILED, risk=risk)
 
+        is_maker = request.order_type == OrderType.LIMIT
         if fill_qty < request.quantity:
-            order = self._apply_fill(order, fill_qty, fill_price, risk)
+            order = self._apply_fill(
+                order, fill_qty, fill_price, risk, is_maker=is_maker
+            )
             return self._update(order, status=OrderStatus.PARTIALLY_FILLED, risk=risk)
 
-        order = self._apply_fill(order, fill_qty, fill_price, risk)
+        order = self._apply_fill(order, fill_qty, fill_price, risk, is_maker=is_maker)
         return self._update(order, status=OrderStatus.FILLED, risk=risk)
 
     def _apply_fill(
-        self, order: Order, qty: Decimal, price: Decimal, risk: RiskEvaluation
+        self,
+        order: Order,
+        qty: Decimal,
+        price: Decimal,
+        risk: RiskEvaluation,
+        *,
+        is_maker: bool = False,
     ) -> Order:
-        fee = (price * qty * self.config.fee_rate).quantize(Decimal("0.00000001"))
+        fee_rate = self._fee_rate(is_maker=is_maker)
+        fee = (price * qty * fee_rate).quantize(Decimal("0.00000001"))
         fill = Fill(
             id=uuid4().hex,
             order_id=order.id,
@@ -278,6 +437,24 @@ class PaperTradingEngine:
         )
         self.state.orders[order_id] = updated
         self._journal("ORDER_CANCELLED", {"id": order_id})
+        return updated
+
+    async def expire(self, order_id: str) -> Order:
+        """Expire a resting order (paper exchange day/session end simulation)."""
+        order = self.state.orders.get(order_id)
+        if order is None:
+            raise KeyError(f"unknown order {order_id}")
+        if order.status not in {
+            OrderStatus.SUBMITTED,
+            OrderStatus.PARTIALLY_FILLED,
+            OrderStatus.APPROVED,
+        }:
+            return order
+        updated = order.model_copy(
+            update={"status": OrderStatus.EXPIRED, "updated_at": utc_now()}
+        )
+        self.state.orders[order_id] = updated
+        self._journal("ORDER_EXPIRED", {"id": order_id})
         return updated
 
     def snapshot(self) -> dict[str, Any]:

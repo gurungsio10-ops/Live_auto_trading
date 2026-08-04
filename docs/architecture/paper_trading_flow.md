@@ -28,9 +28,14 @@ Market data (public / offline fixture)
 
 ## Idempotency
 
-- Orders: `idempotency_key` unique in paper engine + risk seen-set.
-- Cycles: `(symbol, strategy_version, timeframe, candle_open_time)` processed at most once per process.
+- Orders: `idempotency_key` unique in paper engine + risk seen-set (persisted).
+- Cycles: `(symbol, strategy_version, timeframe, candle_open_time)` at most once — process set + `system_state` + `processed_cycle_keys`.
 - Strategy fingerprints prevent duplicate action on identical inputs.
+- Restart hydrate restores orders/fills/idempotency from journal or checkpoint.
+
+## Durability
+
+After each accepted cycle the runtime dual-writes `paper_accounts`, `risk_state`, `strategy_state`, equity snapshots, and the legacy checkpoint. See `docs/operations/recovery_runbook.md`.
 
 ## Cost basis
 

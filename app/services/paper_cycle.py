@@ -278,12 +278,71 @@ async def run_paper_trading_cycle(
     Idempotent for the same (symbol, strategy version, candle close/open time):
     reprocessing the same closed bar does not create a second trade.
     Uses DB cycle locks when a database is available.
+    Auto-attaches a JournalStore when ``journal`` is omitted and the shared
+    DB session is available.
     """
     global _LAST_CYCLE, _LAST_SIGNAL
 
     settings = settings or get_settings()
     correlation_id = correlation_id or uuid4().hex
     source: CandleSource = candle_source or OfflineCandleSource()
+
+    # Auto-attach journal for durable order/fill ledger when caller omitted it.
+    # Skip ephemeral in-memory URLs (pytest isolation) — callers pass JournalStore.
+    _owns_journal_session = False
+    _journal_cm: Any = None
+    if journal is None and ":memory:" not in settings.database_url:
+        try:
+            from app.db.base import session_scope
+
+            _journal_cm = session_scope()
+            _journal_session = await _journal_cm.__aenter__()
+            journal = JournalStore(_journal_session)
+            _owns_journal_session = True
+        except Exception:
+            journal = None
+            _journal_cm = None
+
+    try:
+        return await _run_paper_trading_cycle_inner(
+            symbol=symbol,
+            timeframe=timeframe,
+            correlation_id=correlation_id,
+            strategy_id=strategy_id,
+            candle_source=source,
+            settings=settings,
+            journal=journal,
+            orchestrator=orchestrator,
+            candle_limit=candle_limit,
+            account_id=account_id,
+        )
+    finally:
+        if _owns_journal_session and _journal_cm is not None:
+            try:
+                await _journal_cm.__aexit__(None, None, None)
+            except Exception:
+                logger.warning(
+                    "paper_cycle_journal_session_close_failed",
+                    extra={"correlation_id": correlation_id},
+                )
+
+
+async def _run_paper_trading_cycle_inner(
+    *,
+    symbol: str,
+    timeframe: str,
+    correlation_id: str,
+    strategy_id: str,
+    candle_source: CandleSource,
+    settings: Settings,
+    journal: JournalStore | None,
+    orchestrator: TradingOrchestrator | None,
+    candle_limit: int,
+    account_id: str,
+) -> CycleResult:
+    global _LAST_CYCLE, _LAST_SIGNAL
+
+    source = candle_source
     orch = orchestrator or get_or_create_orchestrator(
         symbol=symbol,
         strategy_id=strategy_id,
@@ -526,6 +585,28 @@ async def run_paper_trading_cycle(
 
             async with session_scope() as session:
                 await persist_cycle_keys(session)
+                try:
+                    await store.save_strategy_run(
+                        session,
+                        run_id=run.id,
+                        strategy_name=run.strategy_name,
+                        strategy_version=run.strategy_version,
+                        symbol=run.symbol,
+                        timeframe=run.timeframe,
+                        candle_open_time=run.candle_open_time,
+                        correlation_id=run.correlation_id,
+                        direction=(
+                            run.direction.value
+                            if hasattr(run.direction, "value")
+                            else str(run.direction)
+                        ),
+                        payload=dict(run.metadata or {}),
+                    )
+                except Exception:
+                    logger.warning(
+                        "strategy_run_persist_failed",
+                        extra={"correlation_id": correlation_id},
+                    )
                 session_paper = get_paper_session()
                 if orch.paper is session_paper.paper:
                     await persist_paper_session(session, correlation_id=correlation_id)

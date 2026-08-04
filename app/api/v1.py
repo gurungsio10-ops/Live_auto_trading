@@ -237,6 +237,84 @@ async def portfolio_history(pagination: PaginationDep) -> dict[str, Any]:
     return _page(get_paper_session().equity_points(), pagination)
 
 
+@router.get(
+    "/recovery/status",
+    summary="Durable recovery / reconciliation status",
+    description=(
+        "Backend source of truth for restart recovery: recon halt, kill switch, "
+        "risk health flags, and last reconciliation result. Frontend must not "
+        "recompute balances or P&L."
+    ),
+)
+async def recovery_status() -> dict[str, Any]:
+    from app.services.reconciliation import reconciliation_status
+
+    session = get_paper_session()
+    rs = session.risk_engine.state
+    recon = reconciliation_status()
+    return {
+        "recovery": {
+            "reconciliation": recon,
+            "kill_switch_enabled": session.kill_switch_enabled,
+            "trading_enabled": session.trading_enabled,
+            "trading_paused": session.trading_paused,
+            "risk": {
+                "reconciliation_healthy": rs.reconciliation_healthy,
+                "risk_engine_healthy": rs.risk_engine_healthy,
+                "database_healthy": rs.database_healthy,
+                "market_data_healthy": rs.market_data_healthy,
+                "circuit_breaker_open": rs.circuit_breaker_open,
+                "circuit_breaker_reason": rs.circuit_breaker_reason,
+                "seen_idempotency_keys": len(rs.seen_idempotency_keys),
+            },
+            "portfolio": {
+                "cash": str(session.paper.state.cash),
+                "realized_pnl": str(session.paper.state.realized_pnl),
+                "peak_equity": str(session._peak_equity),
+                "daily_start_equity": str(session._daily_start_equity),
+                "open_positions": len(session.paper.state.positions),
+                "open_orders": sum(
+                    1
+                    for o in session.paper.state.orders.values()
+                    if o.status.value
+                    in {
+                        "SUBMITTED",
+                        "PARTIALLY_FILLED",
+                        "APPROVED",
+                        "RISK_PENDING",
+                    }
+                ),
+                "fills": len(session.paper.state.fills),
+            },
+            "strategy": {
+                "selected_strategy_id": session.selected_strategy_id,
+                "running_strategies": sorted(session.running_strategies),
+            },
+            "last_successful_reconciliation": (
+                recon.get("last_run_at")
+                if recon.get("healthy") and not recon.get("halted")
+                else None
+            ),
+            "source_of_truth": "backend",
+            "simulated": True,
+        }
+    }
+
+
+@router.post(
+    "/reconciliation/clear-halt",
+    summary="Clear durable reconciliation halt after corrective action",
+)
+async def clear_recon_halt(_: AdminAuthDep) -> dict[str, Any]:
+    from app.services.reconciliation import (
+        clear_reconciliation_halt_persisted,
+        reconciliation_status,
+    )
+
+    await clear_reconciliation_halt_persisted()
+    return {"ok": True, "reconciliation": reconciliation_status()}
+
+
 @router.get("/journal")
 async def journal(pagination: PaginationDep) -> dict[str, Any]:
     export = get_paper_session().journal_export()

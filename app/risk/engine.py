@@ -161,6 +161,14 @@ class RiskEngine:
                 return self._reject(
                     RiskReasonCode.INVALID_PRICE, "Limit price required", checks
                 )
+        if request.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
+            trigger = request.price or request.stop_loss or request.take_profit
+            if trigger is None or trigger <= 0:
+                return self._reject(
+                    RiskReasonCode.INVALID_PRICE,
+                    f"{request.order_type.value} trigger price required",
+                    checks,
+                )
         mark = context.mark_price
         if mark is not None and mark <= 0:
             return self._reject(

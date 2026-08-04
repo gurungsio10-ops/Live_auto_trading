@@ -350,6 +350,45 @@ async def reconciliation_status_endpoint() -> dict[str, Any]:
     return reconciliation_status()
 
 
+@router.get("/recovery/status")
+async def recovery_status_endpoint() -> dict[str, Any]:
+    """Durable recovery snapshot (backend authoritative)."""
+    from app.services.reconciliation import reconciliation_status
+
+    session = get_paper_session()
+    rs = session.risk_engine.state
+    recon = reconciliation_status()
+    return {
+        "reconciliation": recon,
+        "kill_switch_enabled": session.kill_switch_enabled,
+        "trading_enabled": session.trading_enabled,
+        "trading_paused": session.trading_paused,
+        "risk_healthy": rs.reconciliation_healthy and rs.risk_engine_healthy,
+        "cash": str(session.paper.state.cash),
+        "realized_pnl": str(session.paper.state.realized_pnl),
+        "peak_equity": str(session._peak_equity),
+        "daily_start_equity": str(session._daily_start_equity),
+        "open_positions": len(session.paper.state.positions),
+        "last_successful_reconciliation": (
+            recon.get("last_run_at")
+            if recon.get("healthy") and not recon.get("halted")
+            else None
+        ),
+        "source_of_truth": "backend",
+    }
+
+
+@router.post("/reconciliation/clear-halt")
+async def clear_recon_halt_endpoint(_: AdminAuthDep) -> dict[str, Any]:
+    from app.services.reconciliation import (
+        clear_reconciliation_halt_persisted,
+        reconciliation_status,
+    )
+
+    await clear_reconciliation_halt_persisted()
+    return {"ok": True, "reconciliation": reconciliation_status()}
+
+
 @router.post("/trading/cycle")
 async def trading_cycle(body: CycleBody, _: AdminAuthDep) -> dict[str, Any]:
     settings = get_settings()

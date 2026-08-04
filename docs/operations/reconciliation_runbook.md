@@ -15,7 +15,8 @@
 4. `/ready` returns `not_ready`
 5. Operators inspect mismatches (`expected` / `observed` / `difference`)
 6. Correct root cause; do **not** silently overwrite ledger vs materialised cash
-7. Clear halt only after a healthy reconciliation (`clear_reconciliation_halt` / successful run)
+7. Clear halt only after a healthy reconciliation — use `POST /api/v1/reconciliation/clear-halt` (persists) or a successful recon run. Memory-only `clear_reconciliation_halt()` is insufficient across restarts.
+8. Confirm via `GET /api/v1/recovery/status`
 
 ## Manual trigger
 

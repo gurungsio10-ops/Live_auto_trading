@@ -80,12 +80,54 @@ def is_reconciliation_healthy() -> bool:
     return bool(_STATE["healthy"]) and not bool(_STATE["halted"])
 
 
+def apply_halt_from_storage(*, halted: bool) -> None:
+    """Restore process-local halt flags from durable storage (hydrate path)."""
+    _STATE["halted"] = halted
+    _STATE["healthy"] = not halted
+
+
 def clear_reconciliation_halt() -> None:
-    """Operator-cleared halt after corrective action (does not rewrite balances)."""
+    """Operator-cleared halt after corrective action (does not rewrite balances).
+
+    Clears process-local state immediately. Prefer
+    :func:`clear_reconciliation_halt_persisted` so the durable halt flag is
+    also cleared; otherwise a restart will re-halt from ``system_state``.
+    """
     _STATE["halted"] = False
     _STATE["healthy"] = True
     session = get_paper_session()
     session.risk_engine.state.reconciliation_healthy = True
+
+
+async def clear_reconciliation_halt_persisted() -> None:
+    """Clear halt in memory and durable ``system_state`` / risk_state rows."""
+    clear_reconciliation_halt()
+    try:
+        from app.db.base import session_scope
+        from app.services import paper_persistence as store
+
+        async with session_scope() as db:
+            await store.save_reconciliation_halt(db, halted=False, detail="cleared")
+            paper = get_paper_session()
+            await store.save_risk_state(
+                db,
+                circuit_breaker_open=paper.risk_engine.state.circuit_breaker_open,
+                circuit_breaker_reason=paper.risk_engine.state.circuit_breaker_reason,
+                seen_idempotency_keys=list(
+                    paper.risk_engine.state.seen_idempotency_keys
+                ),
+                reconciliation_healthy=True,
+                risk_engine_healthy=paper.risk_engine.state.risk_engine_healthy,
+                database_healthy=paper.risk_engine.state.database_healthy,
+                market_data_healthy=paper.risk_engine.state.market_data_healthy,
+                peak_equity=paper._peak_equity,
+                daily_start_equity=paper._daily_start_equity,
+                consecutive_losses=paper._consecutive_losses,
+                kill_switch_enabled=paper.kill_switch_enabled,
+                halt_reason="",
+            )
+    except Exception:
+        logger.warning("clear_reconciliation_halt_persist_failed")
 
 
 async def run_paper_reconciliation(*, persist: bool = True) -> ReconciliationResult:
