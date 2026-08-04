@@ -68,7 +68,7 @@ Overlapping older PR tips are closed, not merged alongside #26.
 | `npm --prefix frontend run lint` | pass |
 | `npm --prefix frontend run typecheck` | pass |
 | `npm --prefix frontend run build` | pass |
-| GitHub Actions on PR #26 | **all jobs green** (backend, frontend, secret-scan, docker-compose-validate) on tip `84450e6` |
+| GitHub Actions on PR #26 | **all jobs green** (backend, frontend, secret-scan, docker-compose-validate) on tip `709e27d` |
 
 ## 7. Remaining known limitations
 
