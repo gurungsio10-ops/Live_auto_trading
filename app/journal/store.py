@@ -119,7 +119,7 @@ class JournalStore:
                 invalidation_condition=signal.invalidation_condition,
                 suggested_stop=signal.suggested_stop,
                 suggested_target=signal.suggested_target,
-                input_data_fingerprint=signal.input_data_fingerprint,
+                input_data_fingerprint=(signal.input_data_fingerprint or "")[:256],
                 led_to_order=order_id,
                 payload=signal.metadata,
             )

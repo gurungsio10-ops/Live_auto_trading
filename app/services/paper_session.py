@@ -921,6 +921,22 @@ class PaperSession:
 
     # ------------------------------------------------------------------ manual
 
+    async def _persist_durable_now(self) -> None:
+        """Await atomic dual-write so dashboard fills survive process restart."""
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.db.base import create_engine
+
+        engine = create_engine()
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        try:
+            async with factory() as session:
+                await persist_paper_session(session)
+        finally:
+            await engine.dispose()
+
     async def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         symbol = payload["symbol"]
         with self._lock:
@@ -941,10 +957,19 @@ class PaperSession:
             ),
             strategy_name=payload.get("strategy_name") or "manual",
         )
+        try:
+            await self._persist_durable_now()
+        except Exception:
+            # Fail closed for new risk decisions — mark DB unhealthy.
+            self.risk_engine.state.database_healthy = False
         return self._order_dict(order)
 
     async def close_position(self, symbol: str) -> list[dict[str, Any]]:
         await self._close_symbol(symbol, strategy_name="manual")
+        try:
+            await self._persist_durable_now()
+        except Exception:
+            self.risk_engine.state.database_healthy = False
         return self.positions()
 
     async def _close_symbol(
@@ -1161,7 +1186,55 @@ async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
             paper.paper.state.idempotency_index = {
                 str(k): str(v) for k, v in idx.items()
             }
+        # Restore open positions from the positions table when present.
+        try:
+            from sqlalchemy import select
+
+            from app.models.database.portfolio import PositionORM
+
+            rows = (await session.execute(select(PositionORM))).scalars().all()
+            from app.models.domain.trading import Position
+
+            restored: dict[str, Position] = {}
+            for row in rows:
+                if row.quantity and Decimal(str(row.quantity)) > 0:
+                    restored[row.symbol] = Position(
+                        symbol=row.symbol,
+                        quantity=Decimal(str(row.quantity)),
+                        entry_price=Decimal(str(row.entry_price)),
+                        current_price=Decimal(str(row.current_price)),
+                        unrealized_pnl=Decimal(str(row.unrealized_pnl or 0)),
+                        realized_pnl=Decimal(str(row.realized_pnl or 0)),
+                        opened_at=row.opened_at,
+                        strategy_name=row.strategy_name,
+                    )
+            if restored:
+                paper.paper.state.positions = restored
+                for symbol, pos in restored.items():
+                    paper.paper.set_mark_price(symbol, pos.current_price)
+        except Exception:
+            pass
         paper._record_equity_point()
+    else:
+        # Legacy fallback: system_state paper_account (+ flags) when 0006 rows absent.
+        legacy = await store.get_system_value(session, "paper_account")
+        flags = await store.get_system_value(session, "paper_session_flags")
+        if legacy and legacy.get("cash") is not None:
+            paper.paper.state.cash = Decimal(str(legacy["cash"]))
+            paper.paper.state.realized_pnl = Decimal(
+                str(legacy.get("realized_pnl") or "0")
+            )
+            if flags:
+                if flags.get("peak_equity") is not None:
+                    paper._peak_equity = Decimal(str(flags["peak_equity"]))
+                if flags.get("daily_start_equity") is not None:
+                    paper._daily_start_equity = Decimal(
+                        str(flags["daily_start_equity"])
+                    )
+                paper._consecutive_losses = int(flags.get("consecutive_losses") or 0)
+                if flags.get("selected_strategy_id"):
+                    paper.selected_strategy_id = str(flags["selected_strategy_id"])
+            paper._record_equity_point()
 
     risk_state = await store.load_risk_state(session)
     if risk_state is not None:
