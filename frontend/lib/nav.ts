@@ -6,13 +6,17 @@ import {
   Briefcase,
   Cable,
   CandlestickChart,
+  ClipboardList,
   FlaskConical,
+  HeartPulse,
   LayoutDashboard,
   MoreHorizontal,
   Receipt,
   Settings,
   ShieldAlert,
   Sparkles,
+  Timer,
+  WalletCards,
 } from "lucide-react";
 
 export type NavKey =
@@ -24,6 +28,10 @@ export type NavKey =
   | "activity"
   | "strategies"
   | "backtests"
+  | "paperTrading"
+  | "scheduler"
+  | "systemHealth"
+  | "audit"
   | "risk"
   | "connection"
   | "settings"
@@ -49,6 +57,10 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "activity", href: "/activity", label: "Activity", icon: Activity, desktop: true, mobileMore: true },
   { key: "strategies", href: "/strategies", label: "Strategies", icon: Sparkles, desktop: true, mobileMore: true },
   { key: "backtests", href: "/backtests", label: "Backtests", icon: FlaskConical, desktop: true, mobileMore: true },
+  { key: "paperTrading", href: "/paper-trading", label: "Paper trading", icon: WalletCards, desktop: true, mobileMore: true },
+  { key: "scheduler", href: "/scheduler", label: "Scheduler", icon: Timer, desktop: true, mobileMore: true },
+  { key: "systemHealth", href: "/system-health", label: "System health", icon: HeartPulse, desktop: true, mobileMore: true },
+  { key: "audit", href: "/audit", label: "Audit journal", icon: ClipboardList, desktop: true, mobileMore: true },
   { key: "risk", href: "/risk", label: "Risk Centre", icon: ShieldAlert, desktop: true, mobileMore: true },
   { key: "connection", href: "/connection", label: "Connection", icon: Cable, desktop: true, mobileMore: true },
   { key: "settings", href: "/settings", label: "Settings", icon: Settings, desktop: true, mobileMore: true },
