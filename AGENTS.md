@@ -40,7 +40,7 @@ Key behaviours to know:
 - Startup reconciliation is **fail-closed**: exceptions pause trading and persist a halt. Clear with `POST /api/v1/reconciliation/clear-halt` (admin token; not memory-only `clear_reconciliation_halt()`). Status: `GET /api/v1/recovery/status`.
 - `persist_paper_session` stages dual-writes and **commits once**. Cycle persist/recon write failures call `_fail_closed_persistence` (pause + `database_healthy=false` + recon halt) so trading does not continue with divergent memory vs DB.
 - `run_paper_trading_cycle` auto-attaches `JournalStore` when `journal` is omitted **except** for `:memory:` SQLite (pytest isolation). Production/file/Postgres paths get durable order/fill ledger writes.
-- Authoritative paper-v1 release branch is `cursor/release-paper-v1-consolidated-e3a2` (built from PR **#26**). PRs #21–#25 are superseded ancestors. See `docs/audit/pr_consolidation_audit.md` and `docs/audit/release_merge_plan.md`.
+- Authoritative consolidation branch is **`release/atlas-paper-v1`** (based on PR **#28** tip, which includes #23–#27). Full PR map: `docs/PR_CONSOLIDATION_AUDIT.md`. Older notes under `docs/audit/` remain historical.
 - Recovery dashboard: `/recovery` (BFF `/api/recovery/*`). Clear-halt needs confirm `CLEAR_RECONCILIATION_HALT` + server-side admin token.
 - Accounting invariants: `app/accounting/invariants.py` (wired after paper cycles; soak writes `artifacts/soak/invariants.json`).
 - Soak harness: `python -m app.cli paper-soak --seed 42` (use `--max-cycles` in CI). No exchange credentials required.
