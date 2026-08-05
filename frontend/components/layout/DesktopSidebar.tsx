@@ -12,9 +12,11 @@ import { cn } from "@/lib/utils";
 
 const DESKTOP_KEYS = new Set([
   "overview",
+  "brain",
   "positions",
   "orders",
   "signals",
+  "decisions",
   "strategies",
   "backtests",
   "risk",

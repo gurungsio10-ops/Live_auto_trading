@@ -10,6 +10,7 @@ AI modules are never imported here.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -30,6 +31,10 @@ from app.strategies.ema_crossover import EMACrossoverStrategy
 from app.strategies.registry import get_strategy
 
 logger = get_logger("paper_cycle")
+
+# Prevent overlapping manual/scheduled cycles in-process.
+_CYCLE_LOCK = asyncio.Lock()
+_CYCLE_IN_FLIGHT = False
 
 
 class CandleSource(Protocol):
@@ -165,6 +170,10 @@ def strategy_runs(limit: int = 50) -> list[StrategyRun]:
     return list(reversed(_STRATEGY_RUNS[-limit:]))
 
 
+def cycle_in_flight() -> bool:
+    return _CYCLE_IN_FLIGHT
+
+
 async def run_paper_trading_cycle(
     symbol: str = "BTC/USDT",
     timeframe: str = "1m",
@@ -182,11 +191,80 @@ async def run_paper_trading_cycle(
 
     Idempotent for the same (symbol, strategy version, candle close/open time):
     reprocessing the same closed bar does not create a second trade.
+    Concurrent callers are rejected while a cycle is in flight.
     """
+    global _LAST_CYCLE, _LAST_SIGNAL, _CYCLE_IN_FLIGHT
+
+    if _CYCLE_LOCK.locked() or _CYCLE_IN_FLIGHT:
+        return CycleResult(
+            correlation_id=correlation_id or uuid4().hex,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_name=strategy_id,
+            strategy_version="",
+            strategy_run_id="",
+            candle_open_time=None,
+            signal_direction=SignalDirection.HOLD.value,
+            signal_reason="cycle already in progress",
+            accepted=False,
+            reject_reason="CYCLE_IN_FLIGHT",
+            message="Duplicate cycle prevented — wait for the in-flight run to finish",
+        )
+
+    async with _CYCLE_LOCK:
+        _CYCLE_IN_FLIGHT = True
+        try:
+            return await _run_paper_trading_cycle_locked(
+                symbol=symbol,
+                timeframe=timeframe,
+                correlation_id=correlation_id,
+                strategy_id=strategy_id,
+                candle_source=candle_source,
+                settings=settings,
+                journal=journal,
+                orchestrator=orchestrator,
+                candle_limit=candle_limit,
+            )
+        finally:
+            _CYCLE_IN_FLIGHT = False
+
+
+async def _run_paper_trading_cycle_locked(
+    symbol: str = "BTC/USDT",
+    timeframe: str = "1m",
+    correlation_id: str | None = None,
+    *,
+    strategy_id: str = "ema_crossover",
+    candle_source: CandleSource | None = None,
+    settings: Settings | None = None,
+    journal: JournalStore | None = None,
+    orchestrator: TradingOrchestrator | None = None,
+    candle_limit: int = 120,
+) -> CycleResult:
     global _LAST_CYCLE, _LAST_SIGNAL
 
     settings = settings or get_settings()
     correlation_id = correlation_id or uuid4().hex
+
+    # Readiness: paper mode only; kill switch / pause block actionable cycles.
+    if settings.trading_mode != "paper":
+        result = CycleResult(
+            correlation_id=correlation_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_name=strategy_id,
+            strategy_version="",
+            strategy_run_id="",
+            candle_open_time=None,
+            signal_direction=SignalDirection.HOLD.value,
+            signal_reason="paper mode required",
+            accepted=False,
+            reject_reason="LIVE_TRADING_DISABLED",
+            message="Paper cycle requires TRADING_MODE=paper",
+        )
+        _LAST_CYCLE = result
+        return result
+
     source: CandleSource = candle_source or OfflineCandleSource()
     orch = orchestrator or get_or_create_orchestrator(
         symbol=symbol,

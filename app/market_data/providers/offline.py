@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from app.market_data.providers.base import MarketDataProvider
 from app.models.domain.market import Candle, SymbolInfo
@@ -67,4 +68,14 @@ class OfflineFixtureProvider(MarketDataProvider):
             "mode": self.mode,
             "status": "ok",
             "label": "Simulated offline fixtures (not live exchange data)",
+        }
+
+    async def get_provider_status(self) -> dict[str, Any]:
+        return {
+            "provider": self.name,
+            "mode": self.mode,
+            "ok": True,
+            "label": "Simulated offline fixtures (not live exchange data)",
+            "latency_ms": 0,
+            "last_update": None,
         }

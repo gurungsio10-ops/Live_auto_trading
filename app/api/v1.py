@@ -512,11 +512,35 @@ async def audit_events(pagination: PaginationDep) -> dict[str, Any]:
 @router.get("/provider/health", summary="Market data provider health")
 async def provider_health() -> dict[str, Any]:
     from app.market_data.providers.offline import OfflineFixtureProvider
+    from app.market_data.providers.public_exchange import PublicExchangeMarketDataProvider
 
     offline = OfflineFixtureProvider()
+    providers = [await offline.get_provider_status()]
+    # Probe public provider optionally — failure must not break paper mode.
+    try:
+        public = PublicExchangeMarketDataProvider()
+        try:
+            await public.get_ticker("BTC/USDT")
+            providers.append(await public.get_provider_status())
+        finally:
+            await public.close()
+    except Exception as exc:
+        providers.append(
+            {
+                "provider": "public_exchange",
+                "mode": "public_live_market_data",
+                "ok": False,
+                "label": "Public market data unavailable",
+                "error": str(exc)[:160],
+            }
+        )
     return {
-        "providers": [await offline.health()],
-        "note": "Offline fixtures are simulated. Public Binance provider is optional.",
+        "providers": providers,
+        "active_for_cycles": "offline_fixture",
+        "note": (
+            "Paper cycles default to offline fixtures. Public Binance data is optional "
+            "and never enables live trading."
+        ),
     }
 
 
@@ -525,6 +549,44 @@ async def v1_system_health() -> dict[str, Any]:
     from app.monitoring.metrics import build_system_health
 
     return await build_system_health()
+
+
+@router.get("/system/status/unified", summary="Unified control-centre status")
+async def v1_unified_status() -> dict[str, Any]:
+    from app.services.system_status import build_unified_system_status
+
+    return await build_unified_system_status()
+
+
+@router.get("/decisions", summary="Strategy decision feed")
+async def v1_decision_feed(
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    from app.services.decision_feed import build_decision_feed
+
+    items = build_decision_feed(limit=limit)
+    return {"items": items, "total": len(items), "limit": limit, "offset": 0}
+
+
+@router.get("/brain", summary="Atlas Brain evidence-based summary")
+async def v1_atlas_brain() -> dict[str, Any]:
+    from app.services.atlas_brain import build_atlas_brain
+
+    return await build_atlas_brain()
+
+
+@router.get("/execution/connector/health", summary="External execution connector health")
+async def v1_execution_connector_health() -> dict[str, Any]:
+    from app.execution.connectors import get_execution_connector
+
+    return await get_execution_connector().health()
+
+
+@router.get("/exchange/status", summary="Exchange adapter status (paper mock by default)")
+async def v1_exchange_status() -> dict[str, Any]:
+    from app.execution.adapters import get_exchange_adapter
+
+    return await get_exchange_adapter().get_exchange_status()
 
 
 @router.get("/paper/cycles", summary="Paper cycle run history")

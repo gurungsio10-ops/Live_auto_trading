@@ -3,6 +3,7 @@ import {
   Activity,
   BookOpen,
   Briefcase,
+  Brain,
   ClipboardList,
   FlaskConical,
   HeartPulse,
@@ -20,6 +21,8 @@ import {
 
 export type NavKey =
   | "overview"
+  | "trades"
+  | "brain"
   | "positions"
   | "orders"
   | "signals"
@@ -41,7 +44,8 @@ export type NavKey =
   | "activity"
   | "paperTrading"
   | "connection"
-  | "audit";
+  | "audit"
+  | "decisions";
 
 export type NavItem = {
   key: NavKey;
@@ -60,47 +64,48 @@ export type NavItem = {
   moreInfo?: boolean;
 };
 
-/** Primary mobile bottom nav: Overview, Positions, Orders, Signals (+ More button). */
+/** Primary mobile bottom nav: Home / Trades / Brain / Risk / More */
 export const NAV_ITEMS: NavItem[] = [
   {
     key: "overview",
     href: "/",
-    label: "Overview",
-    shortLabel: "Overview",
+    label: "Home",
+    shortLabel: "Home",
     icon: LayoutDashboard,
     desktop: true,
     mobilePrimary: true,
     drawerMain: true,
   },
   {
-    key: "positions",
-    href: "/positions",
-    label: "Positions",
-    shortLabel: "Positions",
-    icon: Briefcase,
-    desktop: true,
-    mobilePrimary: true,
-    drawerMain: true,
-  },
-  {
-    key: "orders",
+    key: "trades",
     href: "/orders",
-    label: "Orders",
-    shortLabel: "Orders",
+    label: "Trades",
+    shortLabel: "Trades",
     icon: Receipt,
+    desktop: false,
+    mobilePrimary: true,
+    drawerMain: true,
+  },
+  {
+    key: "brain",
+    href: "/brain",
+    label: "Brain",
+    shortLabel: "Brain",
+    icon: Brain,
     desktop: true,
     mobilePrimary: true,
     drawerMain: true,
   },
   {
-    key: "signals",
-    href: "/signals",
-    label: "Signals",
-    shortLabel: "Signals",
-    icon: Radio,
+    key: "risk",
+    href: "/risk",
+    label: "Risk",
+    shortLabel: "Risk",
+    icon: ShieldAlert,
     desktop: true,
     mobilePrimary: true,
     drawerMain: true,
+    moreTrading: true,
   },
   {
     key: "more",
@@ -110,6 +115,45 @@ export const NAV_ITEMS: NavItem[] = [
     icon: MoreHorizontal,
     desktop: false,
     mobilePrimary: false,
+  },
+  {
+    key: "positions",
+    href: "/positions",
+    label: "Positions",
+    icon: Briefcase,
+    desktop: true,
+    mobileMore: true,
+    drawerMain: true,
+    moreTrading: true,
+  },
+  {
+    key: "orders",
+    href: "/orders",
+    label: "Orders",
+    icon: Receipt,
+    desktop: true,
+    mobileMore: true,
+    drawerMain: true,
+    moreTrading: true,
+  },
+  {
+    key: "signals",
+    href: "/signals",
+    label: "Signals",
+    icon: Radio,
+    desktop: true,
+    mobileMore: true,
+    drawerMain: true,
+    moreTrading: true,
+  },
+  {
+    key: "decisions",
+    href: "/decisions",
+    label: "Decision Feed",
+    icon: Activity,
+    desktop: true,
+    mobileMore: true,
+    moreTrading: true,
   },
   {
     key: "strategies",
@@ -149,15 +193,6 @@ export const NAV_ITEMS: NavItem[] = [
     desktop: true,
     mobileMore: true,
     drawerMain: true,
-    moreTrading: true,
-  },
-  {
-    key: "risk",
-    href: "/risk",
-    label: "Risk Centre",
-    icon: ShieldAlert,
-    desktop: true,
-    mobileMore: true,
     moreTrading: true,
   },
   {
@@ -217,7 +252,6 @@ export const NAV_ITEMS: NavItem[] = [
     mobileMore: true,
     moreInfo: true,
   },
-  // Legacy routes kept accessible via desktop/more redirects
   {
     key: "portfolio",
     href: "/portfolio",

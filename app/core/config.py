@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     market_data_stale_seconds: int = Field(
         default=30, ge=1, validation_alias="MARKET_DATA_STALE_SECONDS"
     )
+    market_data_public_enabled: bool = Field(
+        default=False, validation_alias="MARKET_DATA_PUBLIC_ENABLED"
+    )
 
     # Paper scheduler — disabled by default; never starts live trading.
     scheduler_enabled: bool = Field(default=False, validation_alias="SCHEDULER_ENABLED")

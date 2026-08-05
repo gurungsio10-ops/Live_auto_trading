@@ -10,7 +10,6 @@ from app.core.config import get_settings
 from app.core.time import utc_now
 from app.db import base as db_base
 from app.services.paper_session import get_paper_session
-from app.services.scheduler_service import get_scheduler_status
 
 # Process counters (reset on restart — durable analytics live in DB).
 _COUNTERS: dict[str, int] = {
@@ -39,36 +38,57 @@ async def probe_database() -> dict[str, Any]:
 
 
 async def build_system_health() -> dict[str, Any]:
-    settings = get_settings()
-    session = get_paper_session()
-    db = await probe_database()
-    sched = await get_scheduler_status()
-    kill = session.kill_switch_enabled or settings.kill_switch_enabled
+    """Backward-compatible health blob enriched with unified status fields."""
+    from app.services.system_status import build_unified_system_status
+
+    unified = await build_unified_system_status()
+    # Preserve legacy keys used by existing frontend/tests.
+    legacy_status = "halted" if unified["kill_switch"]["enabled"] else (
+        "degraded" if unified["status"] == "DEGRADED" else (
+            "ok" if unified["status"] in {"OK", "RUNNING"} else "degraded"
+        )
+    )
     return {
-        "status": "halted" if kill else ("degraded" if not db["ok"] else "ok"),
-        "version": "0.2.0",
-        "environment": settings.app_env,
-        "trading_mode": settings.trading_mode,
-        "live_trading_enabled": settings.live_trading_enabled,
-        "kill_switch_enabled": kill,
-        "exchange_env": settings.exchange_env,
-        "database": db,
+        "status": legacy_status,
+        "unified_status": unified["status"],
+        "version": unified["version"],
+        "environment": unified["environment"],
+        "trading_mode": unified["trading_mode"],
+        "live_trading_enabled": unified["live_trading_enabled"],
+        "kill_switch_enabled": unified["kill_switch"]["enabled"],
+        "exchange_env": unified["exchange_env"],
+        "database": {
+            "ok": unified["database"]["ok"],
+            "latency_ms": unified["database"].get("latency_ms"),
+            "error": unified["database"].get("error"),
+            "state": unified["database"]["state"],
+        },
         "market_data": {
-            "provider": "offline_fixture|binance_public",
-            "default_mode": "simulated_or_public",
-            "ok": True,
-            "label": "Paper cycles use offline fixtures unless public provider configured",
+            "provider": unified["market_data"]["provider"],
+            "default_mode": unified["market_data"]["mode"],
+            "ok": unified["market_data"]["ok"],
+            "label": unified["market_data"]["label"],
+            "state": unified["market_data"]["state"],
         },
         "scheduler": {
-            "enabled": sched["enabled"],
-            "paused": sched["paused"],
-            "status": sched["status"],
-            "last_result": sched["last_result"],
-            "worker_running": sched["worker_running"],
+            "enabled": unified["scheduler"]["enabled"],
+            "paused": unified["scheduler"]["paused"],
+            "status": unified["scheduler"]["status"],
+            "last_result": unified["scheduler"]["last_result"],
+            "worker_running": unified["scheduler"]["worker_running"],
+            "state": unified["scheduler"]["state"],
+            "next_run_at": unified["scheduler"].get("next_run_at"),
+            "last_run_at": unified["scheduler"].get("last_run_at"),
         },
+        "engine": unified["engine"],
+        "exchange": unified["exchange"],
+        "degraded_reasons": unified["degraded_reasons"],
+        "last_successful_cycle": unified["last_successful_cycle"],
+        "last_failed_cycle": unified["last_failed_cycle"],
+        "active_strategy_count": unified["active_strategy_count"],
         "risk_engine_ok": True,
-        "paper_equity": session.portfolio_summary()["equity"],
-        "timestamp": utc_now().isoformat(),
+        "paper_equity": unified["paper_equity"],
+        "timestamp": unified["timestamp"],
     }
 
 

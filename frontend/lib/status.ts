@@ -1,6 +1,48 @@
-export type EngineState = "running" | "paused" | "stopped";
-export type SystemState = "online" | "degraded" | "offline";
+export type EngineState = "running" | "paused" | "stopped" | "starting" | "error" | "degraded";
+export type SystemState = "online" | "degraded" | "offline" | "ok" | "running" | "paused";
 export type RiskState = "safe" | "warning" | "blocked";
+
+export type UnifiedStatus = {
+  status?: string;
+  trading_mode?: string;
+  engine?: { state?: string; reasons?: string[] };
+  system?: { state?: string; degraded_reasons?: string[] };
+  degraded_reasons?: string[];
+  kill_switch?: { enabled?: boolean; state?: string };
+  scheduler?: {
+    state?: string;
+    enabled?: boolean;
+    paused?: boolean;
+    next_run_at?: string | null;
+    last_run_at?: string | null;
+    worker_running?: boolean;
+  };
+  market_data?: { ok?: boolean; label?: string; state?: string; mode?: string };
+  database?: { ok?: boolean; latency_ms?: number | null; state?: string };
+  timestamp?: string;
+  last_successful_cycle?: Record<string, unknown> | null;
+  active_strategy_count?: number;
+};
+
+export function mapEngineState(raw?: string | null): EngineState {
+  const s = (raw || "").toUpperCase();
+  if (s === "RUNNING") return "running";
+  if (s === "PAUSED") return "paused";
+  if (s === "STARTING") return "starting";
+  if (s === "ERROR") return "error";
+  if (s === "DEGRADED") return "degraded";
+  return "stopped";
+}
+
+export function mapSystemState(raw?: string | null, degradedReasons?: string[]): SystemState {
+  const s = (raw || "").toUpperCase();
+  if (s === "DISCONNECTED" || s === "ERROR") return "offline";
+  if (s === "DEGRADED" || (degradedReasons && degradedReasons.length > 0)) return "degraded";
+  if (s === "RUNNING") return "running";
+  if (s === "PAUSED") return "paused";
+  if (s === "OK" || s === "ONLINE") return "online";
+  return "degraded";
+}
 
 export function engineFromPortfolio(input: {
   trading_paused?: boolean;
@@ -17,7 +59,8 @@ export function systemFromHealth(input: {
   demo?: boolean;
   backend_error?: string;
 }): SystemState {
-  if (input.backend_reachable === false || input.demo) return "offline";
+  if (input.backend_reachable === false) return "offline";
+  if (input.demo) return "degraded";
   if (input.backend_error) return "degraded";
   if (input.backend_reachable) return "online";
   return "degraded";
@@ -43,9 +86,12 @@ export const STATUS_LABEL: Record<string, string> = {
   running: "Running",
   paused: "Paused",
   stopped: "Stopped",
-  online: "Online",
+  starting: "Starting",
+  error: "Error",
   degraded: "Degraded",
+  online: "Online",
   offline: "Offline",
+  ok: "OK",
   safe: "Safe",
   warning: "Warning",
   blocked: "Blocked",

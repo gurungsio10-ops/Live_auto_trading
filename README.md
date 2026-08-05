@@ -20,11 +20,25 @@ Docs:
 - `docs/architecture/paper_trading_flow.md`
 - `docs/architecture/risk_controls.md`
 - `docs/architecture/database_schema.md`
+- `docs/architecture/external_execution_connector.md`
 - `docs/operations/runbook.md`
 - `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
 - `docs/analytics/metrics_definitions.md`
 - `docs/security/security_review.md`
 
+### Control-centre APIs (paper)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/system/status/unified` | Engine/system/scheduler/kill/market/degraded reasons |
+| `GET /api/v1/system/health` | Detailed health (includes unified fields) |
+| `GET /api/v1/brain` | Evidence-based Atlas Brain summary |
+| `GET /api/v1/decisions` | Strategy decision feed (EXECUTED/REJECTED/…) |
+| `POST /api/v1/paper/cycle/run` | One risk-checked paper cycle (locked against duplicates) |
+| `GET /api/v1/execution/connector/health` | External execution connector (mock by default) |
+| `GET /api/v1/exchange/status` | Exchange adapter status (paper mock) |
+
+**Live trading warning:** keep `TRADING_MODE=paper` and `LIVE_TRADING_ENABLED=false`. Do not merge Hummingbot into this repo — use `ExecutionConnector` as a separate service.
 ## Local setup
 
 ```bash

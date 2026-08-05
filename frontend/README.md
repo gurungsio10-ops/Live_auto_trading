@@ -42,6 +42,8 @@ frontend/
 | Route | Purpose |
 | --- | --- |
 | `/` | Overview (paper banner, equity hero, metrics, system status, signals, activity) |
+| `/brain` | Atlas Brain — evidence-based regime / risk summary |
+| `/decisions` | Backend decision feed (executed / rejected / skipped) |
 | `/positions` | Open / Closed paper positions |
 | `/orders` | Open / History / Cancelled paper orders + ticket |
 | `/signals` | Strategy signals with filters |
@@ -68,7 +70,7 @@ frontend/
 
 - **Desktop (≥1024px):** collapsible left sidebar, multi-column grids, tables where useful
 - **Tablet (768–1023px):** mobile header + bottom nav
-- **Mobile (<768px):** compact ATLAS header, side drawer, fixed bottom nav (**Overview / Positions / Orders / Signals / More**), safe-area padding
+- **Mobile (<768px):** compact ATLAS header, side drawer, fixed bottom nav (**Home / Trades / Brain / Risk / More**), safe-area padding
 
 ## Design tokens
 
