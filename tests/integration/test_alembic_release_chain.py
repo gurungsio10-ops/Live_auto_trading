@@ -42,21 +42,24 @@ def test_sqlite_upgrade_downgrade_upgrade(tmp_path: Path):
         "orders",
         "fills",
         "system_state",
+        "closed_trades",
+        "performance_reports",
     }:
         assert required in tables, required
     command.downgrade(cfg, "0005_cycle_ops")
     tables_mid = set(inspect(eng).get_table_names())
     assert "paper_accounts" not in tables_mid
+    assert "closed_trades" not in tables_mid
     assert "cycle_locks" in tables_mid
     command.upgrade(cfg, "head")
     with eng.connect() as conn:
         ver = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert ver == "0006_paper_durable"
+    assert ver == "0007_perf_analytics"
     eng.dispose()
 
 
 def test_upgrade_from_main_schema_0004(tmp_path: Path):
-    """Simulate main branch head (0004) then upgrade through 0005/0006."""
+    """Simulate main branch head (0004) then upgrade through 0005/0006/0007."""
     db = tmp_path / "from_main.db"
     url = f"sqlite+aiosqlite:///{db}"
     os.environ["DATABASE_URL"] = url
@@ -71,4 +74,5 @@ def test_upgrade_from_main_schema_0004(tmp_path: Path):
     tables = set(inspect(eng).get_table_names())
     assert "paper_accounts" in tables
     assert "cycle_locks" in tables
+    assert "closed_trades" in tables
     eng.dispose()

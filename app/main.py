@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.mvp import router as mvp_router
@@ -139,6 +140,8 @@ async def correlation_id_middleware(request: Request, call_next: Any) -> Any:
 app.include_router(api_router, prefix="/api")
 app.include_router(mvp_router, prefix="/api")
 app.include_router(v1_router, prefix="/api/v1")
+app.include_router(analytics_router, prefix="/api")
+app.include_router(analytics_router)  # root aliases for dashboard proxies
 app.include_router(auth_router)
 app.include_router(dashboard_router)
 

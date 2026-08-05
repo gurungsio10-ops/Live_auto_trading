@@ -54,3 +54,11 @@ Key behaviours to know:
 - Scheduler is **disabled by default** (`ENABLE_TRADING_SCHEDULER=false`). It persists runs, tracks consecutive failures, and auto-pauses after `SCHEDULER_FAILURE_THRESHOLD`.
 - Mutating BFFs **fail closed** (HTTP 503) when the backend/auth is down — they must not invent APPROVED orders or successful cycles. Yellow "Demo data" on GET routes means the backend is unreachable.
 - CORS is restricted via `CORS_ALLOWED_ORIGINS`. Live money remains hard-blocked.
+
+### Performance analytics (paper evaluation)
+
+- Durable closed-trade journal: table `closed_trades` (Alembic `0007_perf_analytics`).
+- APIs under `/analytics/*` and `/api/analytics/*` (overview, performance, trades, strategies, risk, reports, CSV/JSON export).
+- Frontend: `/performance`, `/trades`, `/trades/[id]`, `/reports` (BFF `/api/analytics/[...path]`).
+- Closed trades are recorded on SELL fills via `PaperSession` / `TradingOrchestrator` (idempotent by trade id `ct-{fill_id}`).
+- Continuous paper runner remains `trading_scheduler` (resume/hydrate/idempotent cycles); analytics logging is attached on cycle complete.

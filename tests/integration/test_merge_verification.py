@@ -213,6 +213,7 @@ def test_alembic_chain_files_present():
         "0004_paper_slice_persistence.py",
         "0005_cycle_locks_scheduler_recon.py",
         "0006_paper_account_risk_strategy_state.py",
+        "0007_performance_analytics.py",
     ]
 
 

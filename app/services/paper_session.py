@@ -139,6 +139,7 @@ class PaperSession:
 
         self._persist_task: Any = None
         self.last_hydrated_at: str | None = None
+        self.paper_session_id: str = f"paper-{uuid4().hex[:12]}"
         self._record_equity_point()
 
     # ------------------------------------------------------------------ market
@@ -349,6 +350,12 @@ class PaperSession:
         )
         context = self._risk_context(symbol)
         realized_before = self.paper.state.realized_pnl
+        position_before = None
+        with self._lock:
+            if side == OrderSide.SELL:
+                pos = self.paper.state.positions.get(symbol)
+                if pos is not None:
+                    position_before = pos.model_copy(deep=True)
 
         try:
             order = await self.gateway.submit(request, context)
@@ -371,9 +378,55 @@ class PaperSession:
                 self._consecutive_losses += 1
             elif realized_delta > 0:
                 self._consecutive_losses = 0
+            await self._record_closed_trades(
+                position_before=position_before,
+                order=order,
+                exit_reason=(
+                    "manual"
+                    if (strategy_name or "manual") == "manual"
+                    else "signal_exit"
+                ),
+            )
 
         self._record_equity_point()
         return order
+
+    async def _record_closed_trades(
+        self,
+        *,
+        position_before: Position | None,
+        order: Order,
+        exit_reason: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Persist round-trip trades for the performance journal (idempotent)."""
+        from app.analytics.recorder import (
+            maybe_build_closed_trade,
+            persist_closed_trades,
+        )
+
+        equity = self._equity()
+        drawdown = (
+            (self._peak_equity - equity) / self._peak_equity
+            if self._peak_equity > 0
+            else Decimal("0")
+        )
+        fills = [f for f in self.paper.state.fills if f.order_id == order.id]
+        trades = maybe_build_closed_trade(
+            position_before=position_before,
+            order=order,
+            fills=fills,
+            fee_rate=self.paper.config.fee_rate,
+            slippage_rate=self.paper.config.slippage_rate,
+            paper_session_id=self.paper_session_id,
+            exit_reason=exit_reason,
+            drawdown=drawdown,
+            consecutive_losses=self._consecutive_losses,
+            kill_switch=self.kill_switch_enabled,
+            correlation_id=correlation_id,
+        )
+        if trades:
+            await persist_closed_trades(trades)
 
     def _synth_rejected_order(
         self, request: OrderRequest, evaluation: RiskEvaluation

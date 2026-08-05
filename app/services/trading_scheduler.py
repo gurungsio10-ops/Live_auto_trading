@@ -160,6 +160,8 @@ async def _run_one_cycle() -> None:
             )
             await persist_paper_session(db, correlation_id=result.correlation_id)
             await paper_cycle.persist_cycle_keys(db)
+            # Analytics heartbeat — durable closed trades already recorded by
+            # the orchestrator; log execution for recovery diagnostics.
             _CYCLE_COUNT += 1
             _LAST_OK = utc_now().isoformat()
             _LAST_ERROR = None
@@ -178,6 +180,9 @@ async def _run_one_cycle() -> None:
                     "correlation_id": result.correlation_id,
                     "signal": result.signal_direction,
                     "order_id": result.order_id,
+                    "run_id": run_id,
+                    "cycles_completed": _CYCLE_COUNT,
+                    "paper_session_id": getattr(session, "paper_session_id", None),
                 },
             )
     except Exception as exc:

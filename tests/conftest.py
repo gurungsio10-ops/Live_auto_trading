@@ -18,6 +18,7 @@ os.environ.setdefault("KILL_SWITCH_ENABLED", "false")
 os.environ.setdefault("EXCHANGE_ENV", "paper")
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+import app.analytics.models
 import app.auth.store
 import app.journal.store
 import app.models.database.market

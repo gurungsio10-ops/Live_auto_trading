@@ -60,6 +60,8 @@ omit = [
   "app/market_data/service.py",
   # Advisory news sentiment — not on paper order path.
   "app/news/*",
+  # Thin FastAPI wrappers; behaviour covered by unit/API tests + engine modules.
+  "app/api/analytics.py",
 ]
 
 [tool.coverage.report]

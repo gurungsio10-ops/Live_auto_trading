@@ -295,6 +295,9 @@ class TradingOrchestrator:
         )
         context = self._risk_context(symbol, mark)
         realized_before = self.paper.state.realized_pnl
+        position_before = (
+            position.model_copy(deep=True) if position is not None else None
+        )
 
         try:
             order = await self.gateway.submit(request, context)
@@ -328,9 +331,57 @@ class TradingOrchestrator:
                 elif realized_delta > 0:
                     self._consecutive_losses = 0
                 self._bars_held.pop(symbol, None)
+                await self._record_performance_trade(
+                    position_before=position_before,
+                    order=order,
+                    exit_reason="signal_exit",
+                )
         return order
 
     # ------------------------------------------------------------- helpers
+
+    async def _record_performance_trade(
+        self,
+        *,
+        position_before: Position | None,
+        order: Order,
+        exit_reason: str,
+    ) -> None:
+        from app.analytics.recorder import (
+            maybe_build_closed_trade,
+            persist_closed_trades,
+        )
+
+        portfolio = self._portfolio_state()
+        fills = [f for f in self.paper.state.fills if f.order_id == order.id]
+        trades = maybe_build_closed_trade(
+            position_before=position_before,
+            order=order,
+            fills=fills,
+            fee_rate=self.paper.config.fee_rate,
+            slippage_rate=self.paper.config.slippage_rate,
+            paper_session_id=self.session_id,
+            exit_reason=exit_reason,
+            drawdown=portfolio.drawdown,
+            consecutive_losses=self._consecutive_losses,
+            kill_switch=bool(
+                self.kill_switch_enabled
+                if self.kill_switch_enabled is not None
+                else self.settings.kill_switch_enabled
+            ),
+        )
+        if trades:
+            # Prefer shared DB session when journal is attached (scheduler/cycle).
+            if self.journal is not None and hasattr(self.journal, "session"):
+                from app.analytics.recorder import persist_closed_trades_in_session
+
+                try:
+                    await persist_closed_trades_in_session(self.journal.session, trades)
+                    await self.journal.session.commit()
+                    return
+                except Exception:
+                    pass
+            await persist_closed_trades(trades)
 
     def _entry_quantity(self, price: Decimal) -> Decimal:
         if price <= 0:
