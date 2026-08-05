@@ -24,7 +24,9 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 - Frontend: `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run test`, `npm --prefix frontend run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`). No dedicated frontend unit-test framework yet — `npm test` runs a secret-exposure smoke check.
 - Tailwind gotcha: use `text-foreground` / `text-brand` for copy colours — `text-primary` clashes with the primary button colour scale.
 - Paper portfolio state is **durable** (hydrate on startup / persist after mutations). Run `alembic upgrade head` (through `0006_paper_durable`). Scheduler is **disabled by default** (`SCHEDULER_ENABLED=false`) and never starts live trading.
-- New ops UI routes: `/paper-trading`, `/scheduler`, `/system-health`, `/audit`. Admin-gated scheduler/reset use server-side `ADMIN_API_TOKEN` only.
+- New ops UI routes: `/paper-trading`, `/scheduler`, `/system-health`, `/audit`, `/more`, `/kill-switch`, `/help`. Admin-gated scheduler/reset use server-side `ADMIN_API_TOKEN` only.
+- Mobile bottom nav is **Overview / Positions / Orders / Signals / More** (see `frontend/lib/nav.ts`). Secondary tools live under `/more` and the header drawer. Desktop uses a collapsible sidebar.
+- Overview risk score is **derived client-side** (labelled “derived”) — the backend does not expose a `risk_score` field. Closed-position history is not available from the API yet; the Closed tab states that honestly.
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
 

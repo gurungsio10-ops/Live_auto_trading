@@ -6,9 +6,11 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { LoadingState } from "@/components/ui/LoadingSkeleton";
 import { DecisionCard } from "@/components/cards/DecisionCard";
+import { PaperModeBanner } from "@/components/ops/PaperModeBanner";
 import { useAsyncData } from "@/lib/use-async-data";
 import type { RiskEvent, TradeSignal } from "@/lib/types";
 
+/** Legacy route retained; primary Signals UX lives at /signals. */
 export default function AiDecisionsPage() {
   const signals = useAsyncData<TradeSignal[]>("/api/signals");
   const risk = useAsyncData<RiskEvent[]>("/api/risk-events");
@@ -17,16 +19,14 @@ export default function AiDecisionsPage() {
     <div className="space-y-4">
       <PageHeader
         title="AI Decisions"
-        description="Understand current strategy signals, advisory insights and risk-engine outcomes."
+        description="Legacy view of strategy signals. Prefer Signals in the primary navigation."
       />
-
+      <PaperModeBanner />
       <div className="rounded-card border border-info/30 bg-info-soft px-4 py-3 text-[13px] leading-relaxed text-foreground">
         Automated execution is controlled by deterministic strategy and risk rules. AI output is
         advisory unless explicitly identified otherwise.
       </div>
-
       <DemoBanner demo={signals.meta?.demo} backendError={signals.meta?.backend_error} />
-
       {signals.status === "loading" && <LoadingState label="Loading decisions…" />}
       {signals.status === "error" && (
         <ErrorState title="Unable to load decisions" message={signals.error} onRetry={signals.reload} />

@@ -1,94 +1,138 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BrandMark } from "@/components/brand/BrandMark";
-import { DeveloperAttribution } from "@/components/brand/DeveloperAttribution";
-import { OwnerAvatar } from "@/components/brand/OwnerAvatar";
-import { NavIcon } from "@/components/icons/NavIcons";
-import { Badge } from "@/components/ui/Badge";
+import { X, LogOut } from "lucide-react";
 import { NAV_ITEMS, isNavActive } from "@/lib/nav";
+import { cn } from "@/lib/utils";
 
-export function MobileDrawer({
-  open,
-  onClose,
-}: {
+type Props = {
   open: boolean;
   onClose: () => void;
-}) {
+  onLogout: () => void;
+};
+
+export function MobileDrawer({ open, onClose, onLogout }: Props) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((i) => i.mobileMore || i.desktop);
+  const main = NAV_ITEMS.filter((i) => i.drawerMain);
+  const system = NAV_ITEMS.filter((i) => i.drawerSystem);
 
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    function onKey(e: KeyboardEvent) {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-    }
+    };
     document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prev;
       document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
     };
   }, [open, onClose]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true" aria-label="More">
+    <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Navigation menu">
       <button
         type="button"
         className="absolute inset-0 bg-black/60"
         aria-label="Close menu"
         onClick={onClose}
       />
-      <aside className="absolute inset-y-0 right-0 flex w-[min(20rem,88vw)] flex-col border-l border-terminal-border bg-terminal-panel shadow-terminal">
-        <div className="flex items-start justify-between gap-3 border-b border-terminal-border p-4">
-          <BrandMark showPaperBadge size="sm" />
+      <aside className="absolute inset-y-0 left-0 flex w-[min(100%,20rem)] flex-col border-r border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <p className="text-sm font-bold tracking-wide text-[var(--text)]">ATLAS</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--success)]">
+              Paper Trading
+            </p>
+          </div>
           <button
             type="button"
-            className="inline-flex min-h-11 min-w-11 items-center justify-center text-terminal-dim"
             onClick={onClose}
-            aria-label="Close"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)]"
+            aria-label="Close menu"
           >
-            <NavIcon name="close" />
+            <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex items-center gap-3 border-b border-terminal-border px-4 py-3">
-          <OwnerAvatar size="md" />
-          <div className="min-w-0">
-            <p className="text-sm text-terminal-text">Account</p>
-            <Badge tone="warn" className="mt-1">
-              PAPER
-            </Badge>
-          </div>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-2" aria-label="Secondary">
-          {items.map((item) => {
-            const active = isNavActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onClose}
-                className={[
-                  "mb-0.5 flex min-h-11 items-center gap-3 px-3 text-xs font-display uppercase tracking-[0.12em]",
-                  active
-                    ? "border border-terminal-accent/40 bg-terminal-accent/10 text-terminal-accent"
-                    : "border border-transparent text-terminal-dim hover:border-terminal-border hover:text-terminal-text",
-                ].join(" ")}
-                aria-current={active ? "page" : undefined}
-              >
-                <NavIcon name={item.key} className="h-4 w-4 shrink-0" />
-                {item.label}
-              </Link>
-            );
-          })}
+
+        <nav className="flex-1 overflow-y-auto px-3 py-3">
+          <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Main
+          </p>
+          <ul className="space-y-0.5">
+            {main.map((item) => {
+              const Icon = item.icon;
+              const active = isNavActive(pathname, item.href);
+              return (
+                <li key={item.key}>
+                  <Link
+                    href={item.href}
+                    onClick={onClose}
+                    className={cn(
+                      "flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium",
+                      active
+                        ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                    )}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+
+          <p className="mb-1.5 mt-4 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            System
+          </p>
+          <ul className="space-y-0.5">
+            {system.map((item) => {
+              const Icon = item.icon;
+              const active = isNavActive(pathname, item.href);
+              return (
+                <li key={item.key}>
+                  <Link
+                    href={item.href}
+                    onClick={onClose}
+                    className={cn(
+                      "flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium",
+                      active
+                        ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"
+                    )}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         </nav>
-        <div className="border-t border-terminal-border p-4">
-          <DeveloperAttribution showAvatar />
+
+        <div className="space-y-2 border-t border-[var(--border)] p-3">
+          <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success-soft)] px-3 py-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-[var(--success)]">Paper Mode</p>
+            <p className="text-[11px] text-[var(--text-secondary)]">All trading is simulated</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onLogout();
+            }}
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[var(--danger)]/40 bg-[var(--danger-soft)] text-sm font-semibold text-[var(--danger)]"
+          >
+            <LogOut className="h-4 w-4" aria-hidden />
+            Logout
+          </button>
         </div>
       </aside>
     </div>

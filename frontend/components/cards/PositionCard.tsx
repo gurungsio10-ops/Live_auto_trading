@@ -2,7 +2,7 @@
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { MoneyValue, PnlValue, QuantityValue } from "@/components/values";
+import { MoneyValue, PnlValue, QuantityValue, TimestampValue } from "@/components/values";
 import type { Position } from "@/lib/types";
 
 export function PositionCard({
@@ -20,7 +20,12 @@ export function PositionCard({
   return (
     <article className="rounded-card border border-border bg-surface-raised/40 p-4">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[15px] font-semibold text-foreground">{position.symbol}</p>
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold text-foreground">{position.symbol}</p>
+          <p className="mt-0.5 text-[12px] text-muted">
+            Opened <TimestampValue value={position.opened_at} relative />
+          </p>
+        </div>
         <Badge tone={side === "LONG" ? "positive" : "negative"}>{side}</Badge>
       </div>
       <div className="mt-3">

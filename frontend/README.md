@@ -20,7 +20,8 @@ Developed by Saugat Gurung.
 frontend/
   app/                  # Routes + BFF API handlers
   components/
-    layout/             # AppShell, DesktopSidebar, MobileHeader, MobileBottomNav, GlobalStatusStrip
+    layout/             # AppShell, DesktopSidebar, MobileHeader, MobileBottomNav, MobileDrawer
+    ops/                # PaperModeBanner, HeroEquityCard, MetricCard, SystemStatusCard, SignalCard, OrderCard, RiskMeter, SegmentTabs
     overview/           # PortfolioHero, EngineStatusCard, SafetyControls
     cards/              # PositionCard, DecisionCard, MarketCard, etc.
     ui/                 # SectionCard, PageHeader, Badge, Button, dialogs, states
@@ -40,27 +41,34 @@ frontend/
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Overview dashboard |
-| `/markets` | Symbols + strategy signals |
-| `/ai-decisions` | Strategy decisions / signals |
-| `/portfolio` | Paper balance, equity, positions |
-| `/orders` | Paper orders |
-| `/activity` | Timeline of signals, risk, orders |
+| `/` | Overview (paper banner, equity hero, metrics, system status, signals, activity) |
+| `/positions` | Open / Closed paper positions |
+| `/orders` | Open / History / Cancelled paper orders + ticket |
+| `/signals` | Strategy signals with filters |
+| `/more` | Grouped secondary navigation |
+| `/risk` | Risk Centre with usage meters |
+| `/risk-events` | Risk event audit list |
+| `/kill-switch` | Dedicated kill-switch control (confirmation + phrase) |
+| `/journal` | Redirects to `/audit` |
+| `/help` | Help and docs |
 | `/strategies` | Strategy cards + paper controls |
 | `/backtests` | Step-by-step paper backtests |
-| `/risk` | Risk Centre |
-| `/connection` | Backend / market / paper broker / live (disabled) |
+| `/scheduler` | Paper scheduler controls |
+| `/system-health` | Backend / DB / market / scheduler posture |
 | `/settings` | Appearance, display, read-only paper/risk |
 | `/about` | Product identity + developer credit |
+| `/portfolio` | Legacy portfolio deep-dive (equity charts) |
+| `/ai-decisions` | Legacy signals view |
+| `/markets` | Symbols + strategy signals |
+| `/activity` | Timeline of signals, risk, orders |
+| `/connection` | Backend / market / paper broker / live (disabled) |
 | `/login` | Session login |
-
-Legacy redirects: `/positions` → `/portfolio`, `/signals` → `/ai-decisions`, `/risk-events` → `/risk`.
 
 ## Responsive behaviour
 
-- **Desktop (≥1024px):** fixed 248px sidebar, content max-width 1600px
-- **Tablet (768–1023px):** mobile header + bottom nav / more sheet
-- **Mobile (<768px):** sticky top header, fixed bottom nav (Home / Markets / AI / Portfolio / More), safe-area padding
+- **Desktop (≥1024px):** collapsible left sidebar, multi-column grids, tables where useful
+- **Tablet (768–1023px):** mobile header + bottom nav
+- **Mobile (<768px):** compact ATLAS header, side drawer, fixed bottom nav (**Overview / Positions / Orders / Signals / More**), safe-area padding
 
 ## Design tokens
 
@@ -74,54 +82,21 @@ Every API screen should support:
 - Error + Retry (`ErrorState`)
 - Empty (`EmptyState`)
 - Demo / backend unavailable (`DemoBanner`)
-- Missing fields shown as **Not available** / **—**
+- Missing fields shown as **Not available** / **—** / **Unavailable**
 
-Never silently present mock data as live exchange balances.
+Never silently present mock data as live exchange balances. Never invent equity charts, fills, orders, or confidence values.
 
-## Paper-trading limitation
+Risk score on Overview / Risk Centre is **derived client-side** from kill switch, pause, drawdown and daily loss versus configured limits — labelled as derived.
 
-- Default and only supported execution mode in the UI is **paper**
-- **PAPER TRADING** badge is shown on primary screens
-- Live exchange section on Connection is explicitly **Not configured**
-- No wallet connect, seed phrase, private key, or API-secret inputs
-
-## Local run commands
+## Commands
 
 ```bash
-npm --prefix frontend install
+npm --prefix frontend ci
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run test --if-present
+npm --prefix frontend run build
 npm --prefix frontend run dev
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000).
-
-Default local login (when auth is configured for development): `admin` / `atlas`.
-
-Backend (separate terminal):
-
-```bash
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Or Codespaces helper: `./scripts/codespaces_start.sh`
-
-Environment:
-
-- `ATLAS_BACKEND_URL` — FastAPI base URL for the Next.js BFF (default `http://127.0.0.1:8000`)
-
-## Test / quality commands
-
-```bash
-npm --prefix frontend run lint
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
-```
-
-There is currently no dedicated frontend unit-test script in `package.json`.
-
-Backend safety checks (repo root):
-
-```bash
-pytest -q
-ruff check app tests
-mypy app
-```
+Login demo credentials: `admin` / `atlas` (see auth BFF).

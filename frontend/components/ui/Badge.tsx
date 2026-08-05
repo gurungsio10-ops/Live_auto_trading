@@ -45,3 +45,41 @@ export function PaperTradingBadge({ className = "" }: { className?: string }) {
     </Badge>
   );
 }
+
+const dotTones = {
+  success: "bg-positive",
+  danger: "bg-negative",
+  warning: "bg-warning",
+  neutral: "bg-muted",
+  info: "bg-info",
+} as const;
+
+export function StatusDot({
+  tone = "neutral",
+  label,
+  pulse = false,
+  className = "",
+}: {
+  tone?: keyof typeof dotTones;
+  label: string;
+  pulse?: boolean;
+  className?: string;
+}) {
+  return (
+    <span
+      className={["inline-flex h-10 w-10 items-center justify-center", className].join(" ")}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <span
+        className={[
+          "h-2.5 w-2.5 rounded-full",
+          dotTones[tone],
+          pulse ? "animate-pulse" : "",
+        ].join(" ")}
+        aria-hidden
+      />
+    </span>
+  );
+}

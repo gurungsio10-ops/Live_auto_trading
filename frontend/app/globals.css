@@ -42,16 +42,22 @@
 
   /* Compatibility aliases used by residual terminal-* utilities */
   --bg: var(--background);
+  --bg-elevated: var(--surface-raised);
+  --bg-hover: var(--surface-hover);
   --panel: var(--surface);
   --elevated: var(--surface-raised);
   --muted: var(--surface-hover);
   --text: var(--text-primary);
   --dim: var(--text-secondary);
   --accent: var(--primary);
+  --accent-soft: var(--primary-soft);
+  --success: var(--positive);
+  --success-soft: var(--positive-soft);
   --gain: var(--positive);
   --loss: var(--negative);
   --warn: var(--warning);
   --danger: var(--negative);
+  --danger-soft: var(--negative-soft);
   --live: var(--negative);
 }
 

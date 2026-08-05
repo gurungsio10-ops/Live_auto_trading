@@ -2,30 +2,36 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MOBILE_MORE_ICON, NAV_ITEMS, isNavActive } from "@/lib/nav";
+import { NAV_ITEMS, isNavActive } from "@/lib/nav";
+import { cn } from "@/lib/utils";
 
-export function MobileBottomNav({ onMore }: { onMore: () => void }) {
+export function MobileBottomNav() {
   const pathname = usePathname();
-  const primary = NAV_ITEMS.filter((i) => i.mobilePrimary);
+  const items = [
+    ...NAV_ITEMS.filter((i) => i.mobilePrimary),
+    NAV_ITEMS.find((i) => i.key === "more")!,
+  ].filter(Boolean);
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background-secondary/95 backdrop-blur lg:hidden"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border)] bg-[var(--bg-elevated)]/95 backdrop-blur-md md:hidden"
+      style={{ paddingBottom: "max(0.35rem, env(safe-area-inset-bottom))" }}
       aria-label="Primary"
     >
-      <ul className="grid h-bottomnav grid-cols-5">
-        {primary.map((item) => {
-          const active = isNavActive(pathname, item.href);
+      <ul className="mx-auto grid max-w-lg grid-cols-5 gap-0.5 px-1 pt-1.5">
+        {items.map((item) => {
           const Icon = item.icon;
+          const active = isNavActive(pathname, item.href);
           return (
             <li key={item.key}>
               <Link
                 href={item.href}
-                className={[
-                  "flex h-full flex-col items-center justify-center gap-0.5 text-[11px] font-medium",
-                  active ? "text-brand" : "text-muted",
-                ].join(" ")}
+                className={cn(
+                  "flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[10px] font-semibold tracking-wide transition",
+                  active
+                    ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                )}
                 aria-current={active ? "page" : undefined}
               >
                 <Icon className="h-5 w-5" aria-hidden />
@@ -34,17 +40,6 @@ export function MobileBottomNav({ onMore }: { onMore: () => void }) {
             </li>
           );
         })}
-        <li>
-          <button
-            type="button"
-            onClick={onMore}
-            className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted"
-            aria-label="More"
-          >
-            <MOBILE_MORE_ICON className="h-5 w-5" aria-hidden />
-            <span>More</span>
-          </button>
-        </li>
       </ul>
     </nav>
   );
