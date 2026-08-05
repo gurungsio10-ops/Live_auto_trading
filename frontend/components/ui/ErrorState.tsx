@@ -1,25 +1,26 @@
 import { Button } from "./Button";
 
 export function ErrorState({
-  title = "Failed to load",
+  title = "Unable to load data",
   message,
   onRetry,
 }: {
   title?: string;
-  message?: string;
+  message: string;
   onRetry?: () => void;
 }) {
   return (
-    <div className="flex min-h-[160px] flex-col items-center justify-center gap-3 border border-terminal-loss/40 bg-terminal-loss/5 px-6 text-center">
-      <p className="font-display text-sm uppercase tracking-[0.12em] text-terminal-loss">
-        {title}
-      </p>
-      {message && <p className="max-w-lg text-xs text-terminal-dim font-mono">{message}</p>}
-      {onRetry && (
-        <Button variant="secondary" onClick={onRetry} type="button">
+    <div
+      className="rounded-card border border-negative/30 bg-negative-soft px-4 py-5"
+      role="alert"
+    >
+      <p className="text-[15px] font-semibold text-foreground">{title}</p>
+      <p className="mt-1 text-[13px] leading-relaxed text-secondary">{message}</p>
+      {onRetry ? (
+        <Button type="button" className="mt-4" onClick={onRetry}>
           Retry
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }

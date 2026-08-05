@@ -15,13 +15,30 @@ Key packages: `app/market_data`, `app/strategies`, `app/risk`, `app/execution`, 
 
 Docs:
 
+- `docs/architecture/latest_repository_audit.md`
 - `docs/architecture/current_state_audit.md`
 - `docs/architecture/paper_trading_flow.md`
 - `docs/architecture/risk_controls.md`
 - `docs/architecture/database_schema.md`
+- `docs/architecture/external_execution_connector.md`
 - `docs/operations/runbook.md`
 - `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
+- `docs/analytics/metrics_definitions.md`
+- `docs/security/security_review.md`
 
+### Control-centre APIs (paper)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/system/status/unified` | Engine/system/scheduler/kill/market/degraded reasons |
+| `GET /api/v1/system/health` | Detailed health (includes unified fields) |
+| `GET /api/v1/brain` | Evidence-based Atlas Brain summary |
+| `GET /api/v1/decisions` | Strategy decision feed (EXECUTED/REJECTED/…) |
+| `POST /api/v1/paper/cycle/run` | One risk-checked paper cycle (locked against duplicates) |
+| `GET /api/v1/execution/connector/health` | External execution connector (mock by default) |
+| `GET /api/v1/exchange/status` | Exchange adapter status (paper mock) |
+
+**Live trading warning:** keep `TRADING_MODE=paper` and `LIVE_TRADING_ENABLED=false`. Do not merge Hummingbot into this repo — use `ExecutionConnector` as a separate service.
 ## Local setup
 
 ```bash
@@ -57,6 +74,7 @@ See `.env.example`. Critical:
 | `TRADING_MODE` | `paper` | Must stay paper for this milestone |
 | `KILL_SWITCH_ENABLED` | `false` | Global halt for new orders |
 | `ADMIN_API_TOKEN` | (unset) | Required for mutating `/api/v1` system routes |
+| `SCHEDULER_ENABLED` | `false` | Paper scheduler off by default |
 | `PAPER_STARTING_BALANCE` | `10000` | Quote currency (USDT) |
 | `PAPER_FEE_BPS` / `PAPER_SLIPPAGE_BPS` | `10` / `5` | Simulated costs |
 | `ALLOWED_SYMBOLS` | `BTC/USDT` | Risk allowlist |
@@ -67,7 +85,7 @@ Never commit real secrets.
 ## Database migrations
 
 ```bash
-alembic upgrade head   # 0001..0004
+alembic upgrade head   # 0001..0006 (durable paper + scheduler)
 ```
 
 ## Running backend / frontend
@@ -146,3 +164,29 @@ CI: `.github/workflows/ci.yml`.
 ## Warnings
 
 This is **not** ready for live money. Passing tests validate paper trading only.
+
+## Durable paper state
+
+Restarting the API restores balances, positions, flags and equity snapshots from the database.
+Paper cycles, kill-switch changes and scheduler runs append durable journal / cycle records.
+
+## Deterministic offline demo
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTC/USDT","timeframe":"1m","strategy_id":"ema_crossover"}'
+```
+
+Offline candles are labelled simulated (`market_data_mode: offline_fixture`).
+
+## Observability
+
+- `GET /health` — liveness
+- `GET /ready` — readiness (paper mode + DB)
+- `GET /metrics` — Prometheus text (no secrets)
+- `GET /system/health` or `GET /api/v1/system/health` — dependency summary
+
+## Disclaimer
+
+Simulated paper results do not guarantee future performance. No profitability claims.

@@ -5,7 +5,7 @@
 Project Atlas is a gated **paper/live crypto trading system** with two services in one repo:
 
 - **Backend** — FastAPI (Python `>=3.11`, runs on 3.12 here). Package config in `pyproject.toml`.
-- **Frontend** — `frontend/` Next.js 14 + TypeScript + Tailwind "Atlas Terminal" ops dashboard.
+- **Frontend** — `frontend/` Next.js 14 + TypeScript + Tailwind paper-trading dashboard (premium dark fintech UI). Route map and design tokens are in `frontend/README.md` and `docs/ui/UX_GUIDELINES.md`.
 
 Standard commands are already documented in `README.md` and `frontend/README.md`; the notes below are only the non-obvious caveats discovered while setting up the environment.
 
@@ -21,7 +21,16 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 ### Test / lint
 
 - Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
-- Frontend: `npm --prefix frontend run lint`, `npm run typecheck`, `npm run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`).
+- Frontend: `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run test`, `npm --prefix frontend run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`). No dedicated frontend unit-test framework yet — `npm test` runs a secret-exposure smoke check.
+- Tailwind gotcha: use `text-foreground` / `text-brand` for copy colours — `text-primary` clashes with the primary button colour scale.
+- Paper portfolio state is **durable** (hydrate on startup / persist after mutations). Run `alembic upgrade head` (through `0006_paper_durable`). Scheduler is **disabled by default** (`SCHEDULER_ENABLED=false`) and never starts live trading.
+- New ops UI routes: `/paper-trading`, `/scheduler`, `/system-health`, `/audit`, `/more`, `/kill-switch`, `/help`, `/brain`, `/decisions`. Admin-gated scheduler/reset use server-side `ADMIN_API_TOKEN` only.
+- Mobile bottom nav is **Home / Trades / Brain / Risk / More** (see `frontend/lib/nav.ts`). Positions, Orders, Signals and secondary tools live under `/more` and the header drawer. Desktop uses a collapsible sidebar.
+- Overview risk score is **derived client-side** (labelled “derived”) — the backend does not expose a `risk_score` field. Closed-position history is not available from the API yet; the Closed tab states that honestly.
+- Unified status: `GET /api/v1/system/status/unified` (FE `/api/system-status`) drives engine/system/scheduler/kill chips and degraded-reason banners. Do not invent status values in the UI.
+- Atlas Brain (`/api/v1/brain`) and Decision Feed (`/api/v1/decisions`) are evidence-based; confidence is omitted unless a strategy returns it.
+- External engines must use `ExecutionConnector` — see `docs/architecture/external_execution_connector.md`. Never merge Hummingbot into Atlas.
+- Paper cycles use an in-process lock to prevent duplicate concurrent runs.
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 
-from app.core.time import ensure_utc
+from app.core.time import ensure_utc, utc_now
 from app.models.domain.market import Candle
 
 TIMEFRAME_DELTAS: dict[str, timedelta] = {
@@ -71,6 +71,7 @@ def validate_candles(
     *,
     timeframe: str | None = None,
     raise_on_error: bool = False,
+    check_stale: bool = False,
 ) -> ValidationResult:
     issues: list[ValidationIssue] = []
     duplicates: list = []
@@ -95,6 +96,15 @@ def validate_candles(
     for idx, candle in enumerate(sorted_candles):
         issues.extend(validate_ohlc_sanity(candle, index=idx))
         ts = ensure_utc(candle.open_time)
+        now = utc_now()
+        if ts > now:
+            issues.append(
+                ValidationIssue(
+                    "FUTURE_TIMESTAMP",
+                    f"Candle open_time {ts.isoformat()} is in the future",
+                    idx,
+                )
+            )
         if ts in seen:
             duplicates.append(ts)
             issues.append(
@@ -127,6 +137,18 @@ def validate_candles(
                         idx,
                     )
                 )
+
+    # Stale tip: last candle older than 2 intervals (opt-in).
+    if check_stale and sorted_candles and delta is not None:
+        tip = ensure_utc(sorted_candles[-1].open_time)
+        if utc_now() - tip > delta * 2:
+            issues.append(
+                ValidationIssue(
+                    "STALE_MARKET_DATA",
+                    f"Latest candle {tip.isoformat()} exceeds freshness window",
+                    len(sorted_candles) - 1,
+                )
+            )
 
     result = ValidationResult(
         ok=len(issues) == 0,

@@ -1,128 +1,169 @@
 "use client";
 
-import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
+import { useEffect, useState } from "react";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { SectionCard } from "@/components/ui/SectionCard";
+import { Badge, PaperTradingBadge } from "@/components/ui/Badge";
 import { DemoBanner } from "@/components/ui/DemoBanner";
-import { LoadingState } from "@/components/ui/LoadingState";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { TradingModeIndicator } from "@/components/TradingModeIndicator";
+import { LoadingState } from "@/components/ui/LoadingSkeleton";
+import { DeveloperProfile } from "@/components/brand/DeveloperProfile";
+import { LockedSettingRow } from "@/components/ui/LockedSettingRow";
 import { useAsyncData } from "@/lib/use-async-data";
-import { formatPct } from "@/lib/format";
+import { formatMoney, formatPct } from "@/lib/format";
+import { BRAND } from "@/lib/brand";
 import type { SettingsView } from "@/lib/types";
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-terminal-border/70 py-2 text-xs">
-      <span className="font-display uppercase tracking-[0.1em] text-terminal-dim">
-        {label}
-      </span>
-      <span className="font-mono tabular-nums text-terminal-text">{value}</span>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
-  const { status, data, error, meta, reload } =
-    useAsyncData<SettingsView>("/api/settings");
+  const { status, data, error, meta, reload } = useAsyncData<SettingsView>("/api/settings");
+  const [theme, setTheme] = useState("dark");
+  const [currency, setCurrency] = useState("USD");
+
+  useEffect(() => {
+    try {
+      setTheme(localStorage.getItem("atlas.theme") ?? "dark");
+      setCurrency(localStorage.getItem("atlas.currency") ?? "USD");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  function persist(key: string, value: string) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-display text-2xl tracking-[0.08em] uppercase">Settings</h1>
-        <p className="mt-1 text-xs text-terminal-dim">
-          Read-only risk limits and trading mode. No live promotion controls.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Manage appearance, display preferences and available paper-trading options."
+        meta={<PaperTradingBadge />}
+      />
       <DemoBanner demo={meta?.demo} backendError={meta?.backend_error} />
 
-      {status === "loading" && <LoadingState label="Loading settings…" />}
+      <SectionCard title="Appearance">
+        <label className="block text-[13px] text-secondary">
+          Theme
+          <select
+            className="mt-2 min-h-touch w-full rounded-control border border-border bg-surface-raised px-3 text-foreground"
+            value={theme}
+            onChange={(e) => {
+              setTheme(e.target.value);
+              persist("atlas.theme", e.target.value);
+            }}
+          >
+            <option value="dark">Dark</option>
+            <option value="light" disabled>
+              Light (not available yet)
+            </option>
+            <option value="system" disabled>
+              System (not available yet)
+            </option>
+          </select>
+        </label>
+      </SectionCard>
+
+      <SectionCard title="Display">
+        <label className="block text-[13px] text-secondary">
+          Currency display format
+          <select
+            className="mt-2 min-h-touch w-full rounded-control border border-border bg-surface-raised px-3 text-foreground"
+            value={currency}
+            onChange={(e) => {
+              setCurrency(e.target.value);
+              persist("atlas.currency", e.target.value);
+            }}
+          >
+            <option value="USD">USD ($)</option>
+            <option value="GBP">GBP (£) display only — no FX conversion</option>
+          </select>
+        </label>
+        <p className="mt-2 text-[12px] text-muted">
+          Backend paper balances are simulated in USD/USDT terms. GBP is a display preference only.
+        </p>
+      </SectionCard>
+
+      {status === "loading" && <LoadingState />}
       {status === "error" && <ErrorState message={error} onRetry={reload} />}
       {status === "success" && (
         <>
-          <TradingModeIndicator mode={data.trading_mode} />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card
-              title="Trading configuration"
-              subtitle="Defaults are paper-safe. Live requires full gating checklist."
-            >
-              <Row label="Trading mode" value={data.trading_mode.toUpperCase()} />
-              <Row
-                label="Live trading enabled"
-                value={data.live_trading_enabled ? "true" : "false"}
-              />
-              <Row
-                label="Kill switch"
-                value={data.kill_switch_enabled ? "ACTIVE" : "clear"}
-              />
-              <Row label="Exchange env" value={data.exchange_env} />
-              <Row label="Exchange id" value={data.exchange_id} />
-              <Row
-                label="Market data stale (s)"
-                value={String(data.market_data_stale_seconds)}
-              />
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {data.supported_symbols.map((s) => (
-                  <Badge key={s} tone="accent">
-                    {s}
-                  </Badge>
-                ))}
-                {data.supported_timeframes.map((t) => (
-                  <Badge key={t} tone="neutral">
-                    {t}
-                  </Badge>
-                ))}
-              </div>
-              <p className="mt-4 border border-terminal-border/80 bg-terminal-muted/30 p-3 text-[11px] text-terminal-dim">
-                This console intentionally omits any &quot;go live&quot; action. Live
-                promotion is a separate gated process outside the dashboard.
-              </p>
-            </Card>
+          <SectionCard title="Paper trading" description="Read-only unless secure update endpoints exist">
+            <LockedSettingRow label="Trading mode" value={data.trading_mode.toUpperCase()} />
+            <LockedSettingRow
+              label="Live trading enabled"
+              value={data.live_trading_enabled ? "true" : "false"}
+            />
+            <LockedSettingRow label="Exchange env" value={data.exchange_env} />
+            <LockedSettingRow label="Exchange id" value={data.exchange_id} />
+            <LockedSettingRow
+              label="Market data stale (s)"
+              value={String(data.market_data_stale_seconds)}
+            />
+          </SectionCard>
 
-            <Card title="Risk limits" subtitle="Read-only snapshot from configuration">
-              <Row
-                label="Max risk / trade"
-                value={formatPct(data.risk_limits.max_risk_per_trade)}
-              />
-              <Row
-                label="Max position exposure"
-                value={formatPct(data.risk_limits.max_position_exposure)}
-              />
-              <Row
-                label="Max portfolio exposure"
-                value={formatPct(data.risk_limits.max_portfolio_exposure)}
-              />
-              <Row
-                label="Max open positions"
-                value={String(data.risk_limits.max_open_positions)}
-              />
-              <Row
-                label="Max daily loss"
-                value={formatPct(data.risk_limits.max_daily_loss)}
-              />
-              <Row
-                label="Max drawdown"
-                value={formatPct(data.risk_limits.max_drawdown)}
-              />
-              <Row
-                label="Max consecutive losses"
-                value={String(data.risk_limits.max_consecutive_losses)}
-              />
-              <Row
-                label="Max orders / minute"
-                value={String(data.risk_limits.max_orders_per_minute)}
-              />
-              <Row
-                label="Min order notional"
-                value={`$${data.risk_limits.min_order_notional}`}
-              />
-              <Row
-                label="Default leverage"
-                value={`${data.risk_limits.default_leverage}x`}
-              />
-            </Card>
-          </div>
+          <SectionCard title="Risk" description="Active rules (read-only)">
+            <LockedSettingRow
+              label="Max risk / trade"
+              value={formatPct(data.risk_limits.max_risk_per_trade)}
+            />
+            <LockedSettingRow
+              label="Max position exposure"
+              value={formatPct(data.risk_limits.max_position_exposure)}
+            />
+            <LockedSettingRow
+              label="Max portfolio exposure"
+              value={formatPct(data.risk_limits.max_portfolio_exposure)}
+            />
+            <LockedSettingRow
+              label="Max daily loss"
+              value={formatPct(data.risk_limits.max_daily_loss)}
+            />
+            <LockedSettingRow
+              label="Max drawdown"
+              value={formatPct(data.risk_limits.max_drawdown)}
+            />
+            <LockedSettingRow
+              label="Min order notional"
+              value={formatMoney(data.risk_limits.min_order_notional)}
+            />
+          </SectionCard>
+
+          <SectionCard title="Security">
+            <LockedSettingRow label="Authentication" value="Signed HTTP-only session cookie" />
+            <LockedSettingRow label="Secrets in browser storage" value="None" />
+            <p className="mt-3 text-[13px] text-secondary">
+              API tokens and auth secrets remain server-side. Atlas never requests seed phrases or
+              private keys.
+            </p>
+          </SectionCard>
         </>
       )}
+
+      <SectionCard title="About" description="Product identity">
+        <div id="about" className="scroll-mt-24 space-y-4">
+          <div>
+            <p className="text-xl font-bold text-foreground">{BRAND.name}</p>
+            <p className="mt-1 text-[14px] text-secondary">{BRAND.subtitle}</p>
+            <div className="mt-3">
+              <PaperTradingBadge />
+            </div>
+          </div>
+          <DeveloperProfile />
+          <div className="grid gap-2 text-[13px] text-secondary sm:grid-cols-2">
+            <p>Version · {BRAND.version}</p>
+            <p>Environment · {process.env.NODE_ENV}</p>
+            <p>Current mode · Paper trading</p>
+            <p>Purpose · Personal research, testing and strategy evaluation</p>
+          </div>
+          <p className="text-[12px] text-muted">
+            Optional owner photo path: {BRAND.ownerImageFsPath}
+          </p>
+        </div>
+      </SectionCard>
     </div>
   );
 }

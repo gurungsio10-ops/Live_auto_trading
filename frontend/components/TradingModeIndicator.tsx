@@ -23,14 +23,14 @@ export function TradingModeIndicator({
       role="status"
       aria-label={`Trading mode: ${mode}`}
     >
-      <div className="flex items-center justify-between gap-4">
-        <div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <p className="text-[10px] tracking-[0.28em] opacity-80">Trading mode</p>
-          <p className="mt-1 text-2xl font-semibold sm:text-3xl">
-            {isLive ? "LIVE" : "PAPER"}
+          <p className="mt-1 text-[clamp(1.5rem,5vw,1.875rem)] font-semibold">
+            {isLive ? "LIVE" : "PAPER TRADING"}
           </p>
         </div>
-        <div className="text-right text-[10px] font-mono tracking-normal normal-case opacity-90">
+        <div className="text-[10px] font-mono tracking-normal normal-case opacity-90 sm:text-right">
           {isLive ? (
             <>
               <p className="font-bold">REAL CAPITAL AT RISK</p>

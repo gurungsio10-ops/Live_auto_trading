@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.errors import ConfigurationError, LiveTradingDisabledError
 
@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     market_data_stale_seconds: int = Field(
         default=30, ge=1, validation_alias="MARKET_DATA_STALE_SECONDS"
     )
+    market_data_public_enabled: bool = Field(
+        default=False, validation_alias="MARKET_DATA_PUBLIC_ENABLED"
+    )
+
+    # Paper scheduler — disabled by default; never starts live trading.
+    scheduler_enabled: bool = Field(default=False, validation_alias="SCHEDULER_ENABLED")
+    scheduler_interval_seconds: int = Field(
+        default=60, ge=5, le=3600, validation_alias="SCHEDULER_INTERVAL_SECONDS"
+    )
     webhook_alert_url: str | None = None
 
     # Paper execution (env-driven; Decimal only)
@@ -93,7 +102,8 @@ class Settings(BaseSettings):
     min_order_notional: Decimal = Decimal("10")
     default_leverage: Decimal = Decimal("1")
 
-    supported_symbols: tuple[str, ...] = Field(
+    # NoDecode: keep plain "BTC/USDT" env values (avoid JSON-decoding tuples).
+    supported_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
         default=("BTC/USDT",), validation_alias="ALLOWED_SYMBOLS"
     )
     supported_timeframes: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
@@ -134,8 +144,21 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_symbols(cls, value: object) -> object:
         if isinstance(value, str):
-            parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
+            text = value.strip()
+            if text.startswith("[") and text.endswith("]"):
+                # Allow accidental JSON-array forms in .env
+                import json
+
+                try:
+                    loaded = json.loads(text)
+                    if isinstance(loaded, list):
+                        return tuple(str(p).strip() for p in loaded if str(p).strip())
+                except json.JSONDecodeError:
+                    pass
+            parts = [p.strip() for p in text.replace(";", ",").split(",") if p.strip()]
             return tuple(parts)
+        if isinstance(value, (list, tuple)):
+            return tuple(str(p).strip() for p in value if str(p).strip())
         return value
 
     @field_validator(

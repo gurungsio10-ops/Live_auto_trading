@@ -84,19 +84,20 @@ async def ready() -> dict[str, Any]:
 
 @router.get("/system/status", response_model=SystemHealth)
 async def system_status() -> SystemHealth:
+    from app.monitoring.metrics import build_system_health
+
+    health = await build_system_health()
     settings = get_settings()
-    session = get_paper_session()
-    kill = session.kill_switch_enabled or settings.kill_switch_enabled
     return SystemHealth(
-        status="halted" if kill else "ok",
+        status=health["status"],
         trading_mode=settings.trading_mode,
-        kill_switch_enabled=kill,
+        kill_switch_enabled=health["kill_switch_enabled"],
         live_trading_enabled=settings.live_trading_enabled,
         exchange_env=settings.exchange_env,
-        database_ok=True,
-        market_data_ok=True,
+        database_ok=bool(health["database"].get("ok")),
+        market_data_ok=bool(health["market_data"].get("ok")),
         risk_engine_ok=True,
-        detail="paper trading vertical slice",
+        detail="paper trading durable platform",
     )
 
 
@@ -329,6 +330,33 @@ async def run_cycle(body: PaperCycleBody) -> dict[str, Any]:
                 }
             )
     session._record_equity_point()
+    await session._persist_safe(
+        message="Paper cycle completed",
+        correlation_id=result.correlation_id,
+    )
+    from app.monitoring.metrics import inc
+    from app.services.paper_persistence import record_cycle_run
+
+    inc("paper_cycles_total")
+    if result.accepted and result.order_id:
+        inc("orders_accepted_total")
+    if result.risk_decision in {"REJECTED", "HALTED"}:
+        inc("orders_rejected_total")
+    inc("risk_decisions_total")
+    await record_cycle_run(
+        correlation_id=result.correlation_id,
+        symbol=result.symbol,
+        timeframe=result.timeframe,
+        strategy_id=body.strategy_id,
+        status="completed"
+        if result.accepted or result.idempotent_replay
+        else "rejected",
+        signal_direction=result.signal_direction,
+        order_id=result.order_id,
+        risk_decision=result.risk_decision,
+        risk_reason_code=result.risk_reason_code,
+        payload={"message": result.message, "simulated": True},
+    )
 
     return {
         "correlation_id": result.correlation_id,
@@ -353,6 +381,7 @@ async def run_cycle(body: PaperCycleBody) -> dict[str, Any]:
         "idempotent_replay": result.idempotent_replay,
         "message": result.message,
         "simulated": True,
+        "market_data_mode": "offline_fixture",
     }
 
 
@@ -389,6 +418,11 @@ async def paper_reset(body: PaperResetBody, _: AdminAuthDep) -> dict[str, Any]:
         )
     paper_cycle.reset_cycle_state()
     session = reset_paper_session()
+    from app.services.paper_persistence import persist_paper_session
+
+    await persist_paper_session(
+        session, journal_message="Paper account reset to starting balance"
+    )
     return {
         "ok": True,
         "cash": str(session.paper.state.cash),
@@ -403,3 +437,190 @@ async def live_execute_blocked() -> None:
     raise LiveTradingDisabledError(
         "Live order execution is not implemented. Use paper cycle endpoints."
     )
+
+
+class SchedulerEnableBody(BaseModel):
+    confirm: str = Field(..., description="Must equal ENABLE_PAPER_SCHEDULER")
+
+
+class SchedulerPauseBody(BaseModel):
+    paused: bool = True
+
+
+@router.get("/scheduler/status", summary="Paper scheduler status")
+async def scheduler_status() -> dict[str, Any]:
+    from app.services.scheduler_service import get_scheduler_status
+
+    return await get_scheduler_status()
+
+
+@router.post("/scheduler/enable", summary="Enable paper scheduler (admin)")
+async def scheduler_enable(
+    body: SchedulerEnableBody, _: AdminAuthDep
+) -> dict[str, Any]:
+    if body.confirm != "ENABLE_PAPER_SCHEDULER":
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation failed: confirm must equal ENABLE_PAPER_SCHEDULER",
+        )
+    from app.services.scheduler_service import set_enabled
+
+    return await set_enabled(True)
+
+
+@router.post("/scheduler/disable", summary="Disable paper scheduler (admin)")
+async def scheduler_disable(_: AdminAuthDep) -> dict[str, Any]:
+    from app.services.scheduler_service import set_enabled
+
+    return await set_enabled(False)
+
+
+@router.post("/scheduler/pause", summary="Pause or resume paper scheduler (admin)")
+async def scheduler_pause(body: SchedulerPauseBody, _: AdminAuthDep) -> dict[str, Any]:
+    from app.services.scheduler_service import set_paused
+
+    return await set_paused(body.paused)
+
+
+@router.get("/analytics/paper", summary="Paper trading analytics")
+async def paper_analytics() -> dict[str, Any]:
+    from app.db.base import SessionLocal
+    from app.services.analytics_service import compute_paper_analytics
+
+    async with SessionLocal() as db:
+        return await compute_paper_analytics(db)
+
+
+@router.get("/audit/events", summary="Durable trade journal events")
+async def audit_events(pagination: PaginationDep) -> dict[str, Any]:
+    from app.db.base import SessionLocal
+    from app.repositories.paper_state_repository import PaperStateRepository
+
+    async with SessionLocal() as db:
+        repo = PaperStateRepository(db)
+        items = await repo.list_journal(
+            limit=pagination.limit, offset=pagination.offset
+        )
+    return {
+        "items": items,
+        "total": len(items),
+        "limit": pagination.limit,
+        "offset": pagination.offset,
+    }
+
+
+@router.get("/provider/health", summary="Market data provider health")
+async def provider_health() -> dict[str, Any]:
+    from app.market_data.providers.offline import OfflineFixtureProvider
+    from app.market_data.providers.public_exchange import PublicExchangeMarketDataProvider
+
+    offline = OfflineFixtureProvider()
+    providers = [await offline.get_provider_status()]
+    # Probe public provider optionally — failure must not break paper mode.
+    try:
+        public = PublicExchangeMarketDataProvider()
+        try:
+            await public.get_ticker("BTC/USDT")
+            providers.append(await public.get_provider_status())
+        finally:
+            await public.close()
+    except Exception as exc:
+        providers.append(
+            {
+                "provider": "public_exchange",
+                "mode": "public_live_market_data",
+                "ok": False,
+                "label": "Public market data unavailable",
+                "error": str(exc)[:160],
+            }
+        )
+    return {
+        "providers": providers,
+        "active_for_cycles": "offline_fixture",
+        "note": (
+            "Paper cycles default to offline fixtures. Public Binance data is optional "
+            "and never enables live trading."
+        ),
+    }
+
+
+@router.get("/system/health", summary="Detailed system health")
+async def v1_system_health() -> dict[str, Any]:
+    from app.monitoring.metrics import build_system_health
+
+    return await build_system_health()
+
+
+@router.get("/system/status/unified", summary="Unified control-centre status")
+async def v1_unified_status() -> dict[str, Any]:
+    from app.services.system_status import build_unified_system_status
+
+    return await build_unified_system_status()
+
+
+@router.get("/decisions", summary="Strategy decision feed")
+async def v1_decision_feed(
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    from app.services.decision_feed import build_decision_feed
+
+    items = build_decision_feed(limit=limit)
+    return {"items": items, "total": len(items), "limit": limit, "offset": 0}
+
+
+@router.get("/brain", summary="Atlas Brain evidence-based summary")
+async def v1_atlas_brain() -> dict[str, Any]:
+    from app.services.atlas_brain import build_atlas_brain
+
+    return await build_atlas_brain()
+
+
+@router.get("/execution/connector/health", summary="External execution connector health")
+async def v1_execution_connector_health() -> dict[str, Any]:
+    from app.execution.connectors import get_execution_connector
+
+    return await get_execution_connector().health()
+
+
+@router.get("/exchange/status", summary="Exchange adapter status (paper mock by default)")
+async def v1_exchange_status() -> dict[str, Any]:
+    from app.execution.adapters import get_exchange_adapter
+
+    return await get_exchange_adapter().get_exchange_status()
+
+
+@router.get("/paper/cycles", summary="Paper cycle run history")
+async def paper_cycles(pagination: PaginationDep) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from app.db.base import SessionLocal
+    from app.models.database.ops import PaperCycleRunORM
+
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(PaperCycleRunORM)
+                .order_by(PaperCycleRunORM.created_at.desc())
+                .offset(pagination.offset)
+                .limit(pagination.limit)
+            )
+        ).all()
+    items = [
+        {
+            "id": r.id,
+            "correlation_id": r.correlation_id,
+            "symbol": r.symbol,
+            "timeframe": r.timeframe,
+            "strategy_id": r.strategy_id,
+            "status": r.status,
+            "signal_direction": r.signal_direction,
+            "order_id": r.order_id,
+            "risk_decision": r.risk_decision,
+            "risk_reason_code": r.risk_reason_code,
+            "duration_ms": r.duration_ms,
+            "error_summary": r.error_summary,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+    return _page(items, pagination)

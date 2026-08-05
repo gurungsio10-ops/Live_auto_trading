@@ -7,11 +7,16 @@ export function DemoBanner({
 }) {
   if (!demo && !backendError) return null;
   return (
-    <div className="mb-4 border border-terminal-warn/40 bg-terminal-warn/10 px-3 py-2 text-[11px] text-terminal-warn font-mono">
-      {demo
-        ? "Demo data — FastAPI backend unavailable or endpoint missing. UI remains fully interactive via local mock state."
-        : null}
-      {backendError ? ` ${backendError}` : null}
+    <div
+      className="rounded-card border border-warning/35 bg-warning-soft px-4 py-3 text-[13px] text-foreground"
+      role="status"
+    >
+      <p className="font-semibold">{demo ? "Demo data" : "Backend unavailable"}</p>
+      <p className="mt-1 text-secondary">
+        {backendError
+          ? `Project Atlas could not use live backend data. ${backendError}`
+          : "Showing demo data because the backend is unavailable."}
+      </p>
     </div>
   );
 }

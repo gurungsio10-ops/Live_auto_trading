@@ -56,11 +56,16 @@ export function useAsyncData<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, queryKey, tick]);
 
-  return { ...state, reload, setData: (data: T) => {
-    setState((prev) =>
-      prev.status === "success"
-        ? { ...prev, data }
-        : { status: "success", data, error: null, meta: prev.meta ?? { demo: true } },
-    );
-  } };
+  return {
+    ...state,
+    reload,
+    setData: (next: T | ((prev: T | null) => T)) => {
+      setState((prev) => {
+        const data = typeof next === "function" ? (next as (p: T | null) => T)(prev.data) : next;
+        return prev.status === "success"
+          ? { ...prev, data }
+          : { status: "success", data, error: null, meta: prev.meta ?? { demo: true } };
+      });
+    },
+  };
 }

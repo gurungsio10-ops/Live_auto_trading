@@ -10,7 +10,7 @@ export function Table({
   dense?: boolean;
 }) {
   return (
-    <div className="overflow-x-auto border border-terminal-border">
+    <div className="max-w-full overflow-x-auto border border-terminal-border">
       <table className="w-full min-w-[640px] border-collapse text-left text-xs">
         <thead className="bg-terminal-elevated/80 text-terminal-dim">
           <tr>
@@ -37,13 +37,16 @@ export function Td({
   children,
   className = "",
   mono = true,
+  title,
 }: {
   children: ReactNode;
   className?: string;
   mono?: boolean;
+  title?: string;
 }) {
   return (
     <td
+      title={title}
       className={[
         "px-3 py-2 align-middle",
         mono ? "font-mono tabular-nums" : "font-display",
