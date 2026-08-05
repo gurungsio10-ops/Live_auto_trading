@@ -5,6 +5,8 @@ import { PortfolioSummary } from "@/components/PortfolioSummary";
 import { SystemStatusPanel } from "@/components/SystemStatusPanel";
 import { TradingModeIndicator } from "@/components/TradingModeIndicator";
 import { KillSwitchControl } from "@/components/KillSwitchControl";
+import { SchedulerControl } from "@/components/SchedulerControl";
+import { OpsStatusStrip } from "@/components/OpsStatusStrip";
 import { EquityCurveChart } from "@/components/charts/EquityCurveChart";
 import { DrawdownChart } from "@/components/charts/DrawdownChart";
 import { Card } from "@/components/ui/Card";
@@ -22,6 +24,10 @@ import type {
   PortfolioSummary as PortfolioSummaryType,
   SystemStatusPayload,
 } from "@/lib/types";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
 
 export default function OverviewPage() {
   const portfolio = useAsyncData<PortfolioSummaryType>("/api/portfolio");
@@ -162,24 +168,41 @@ export default function OverviewPage() {
       ? (lastCycle.indicators as Record<string, unknown>)
       : null;
 
+  const health =
+    system.status === "success" ? asRecord(system.data.health) : {};
+  const metrics =
+    system.status === "success" ? asRecord(system.data.metrics) : {};
+  const scheduler = asRecord(health.scheduler ?? metrics.scheduler);
+  const schedulerRunning = scheduler.running === true;
+  const backendConnected = system.status === "success" && portfolio.status === "success";
+  const backendLoading =
+    system.status === "loading" || portfolio.status === "loading";
+
   return (
-    <div className="min-w-0 space-y-5">
+    <div className="min-w-0 space-y-5" data-testid="home-overview">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-display text-2xl tracking-[0.08em] uppercase text-terminal-text">
-            Overview
+            Home
           </h1>
           <p className="mt-1 text-xs text-terminal-dim">
-            Portfolio, risk gates, scheduler, and equity trajectory — paper only.
+            Portfolio, risk gates, scheduler, and equity — paper only.
           </p>
         </div>
         <div className="flex max-w-full flex-wrap gap-2">
-          <Button type="button" variant="secondary" disabled={cyclePending} onClick={runPaperCycle}>
+          <Button
+            type="button"
+            variant="secondary"
+            className="min-h-[44px]"
+            disabled={cyclePending}
+            onClick={runPaperCycle}
+          >
             {cyclePending ? "Running…" : "Run one paper cycle"}
           </Button>
           <Button
             type="button"
             variant="warn"
+            className="min-h-[44px]"
             disabled={pausePending || portfolio.status !== "success"}
             onClick={togglePause}
           >
@@ -189,47 +212,65 @@ export default function OverviewPage() {
                 ? "Resume trading"
                 : "Pause trading"}
           </Button>
-          <Button type="button" variant="secondary" disabled={exportPending} onClick={exportJournal}>
+          <Button
+            type="button"
+            variant="secondary"
+            className="min-h-[44px]"
+            disabled={exportPending}
+            onClick={exportJournal}
+          >
             {exportPending ? "Exporting…" : "Export journal"}
           </Button>
           <Button
             type="button"
             variant="secondary"
+            className="min-h-[44px]"
             disabled={reconPending}
             onClick={runReconciliation}
           >
             {reconPending ? "Reconciling…" : "Run reconciliation"}
           </Button>
-          <Button type="button" variant="danger" disabled={resetPending} onClick={resetPaperAccount}>
+          <Button
+            type="button"
+            variant="danger"
+            className="min-h-[44px]"
+            disabled={resetPending}
+            onClick={resetPaperAccount}
+          >
             {resetPending ? "Resetting…" : "Reset paper account"}
           </Button>
         </div>
       </div>
 
-      <Card
-        title="System status"
-        subtitle="Readiness · scheduler · reconciliation · last cycle (UTC)"
-        actions={
-          system.status === "success" ? (
-            <Badge tone="accent">LIVE FEED</Badge>
-          ) : system.status === "loading" ? (
-            <Badge tone="neutral">LOADING</Badge>
-          ) : (
-            <Badge tone="danger">ERROR</Badge>
-          )
-        }
-      >
-        {system.status === "loading" && <LoadingState label="Loading system status…" />}
-        {system.status === "error" && (
-          <ErrorState message={system.error} onRetry={system.reload} />
-        )}
-        {system.status === "success" && <SystemStatusPanel data={system.data} />}
-      </Card>
-
       <DemoBanner
         demo={portfolio.meta?.demo || equity.meta?.demo}
         backendError={portfolio.meta?.backend_error || equity.meta?.backend_error}
       />
+
+      {/* Mobile-priority strip: mode + connectivity + controls status */}
+      <OpsStatusStrip
+        runtimeMode={
+          portfolio.status === "success"
+            ? (portfolio.data as { runtime_mode?: string }).runtime_mode
+            : undefined
+        }
+        tradingMode={
+          portfolio.status === "success" ? portfolio.data.trading_mode : undefined
+        }
+        exchangeEnv={
+          portfolio.status === "success" ? portfolio.data.exchange_env : undefined
+        }
+        backendConnected={backendConnected}
+        backendLoading={backendLoading}
+        schedulerRunning={schedulerRunning}
+        killSwitchActive={
+          portfolio.status === "success"
+            ? portfolio.data.kill_switch_enabled
+            : false
+        }
+        liveEnabled={false}
+      />
+
       {actionMsg && (
         <div
           className={[
@@ -249,23 +290,30 @@ export default function OverviewPage() {
       )}
       {portfolio.status === "success" && (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <TradingModeIndicator
-              mode={portfolio.data.trading_mode}
-              runtimeMode={(portfolio.data as { runtime_mode?: string }).runtime_mode}
-              exchangeEnv={portfolio.data.exchange_env}
-            />
+          <TradingModeIndicator
+            mode={portfolio.data.trading_mode}
+            runtimeMode={(portfolio.data as { runtime_mode?: string }).runtime_mode}
+            exchangeEnv={portfolio.data.exchange_env}
+          />
+          <div className="flex flex-wrap gap-2">
             {portfolio.data.trading_paused && <Badge tone="warn">TRADING PAUSED</Badge>}
             {portfolio.data.kill_switch_enabled && <Badge tone="danger">KILL SWITCH</Badge>}
+            <Badge tone="neutral">LIVE DISABLED</Badge>
           </div>
           <p className="text-[11px] font-mono text-terminal-dim">
             {(portfolio.data as { runtime_mode?: string }).runtime_mode || "PAPER"} MODE —
             fills are simulated. Results do not guarantee future performance.
           </p>
-          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(260px,1fr)]">
-            <Card title="Portfolio summary" subtitle="Available cash, equity, and P&L stack">
-              <PortfolioSummary data={portfolio.data} />
-            </Card>
+
+          <Card title="Portfolio" subtitle="Balance, equity, and total P&L">
+            <PortfolioSummary data={portfolio.data} />
+          </Card>
+
+          <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+            <SchedulerControl
+              running={schedulerRunning}
+              onChanged={() => void system.reload()}
+            />
             <KillSwitchControl
               active={portfolio.data.kill_switch_enabled}
               onChanged={(enabled) =>
@@ -273,10 +321,11 @@ export default function OverviewPage() {
               }
             />
           </div>
+
           {lastCycle && (
             <Card
-              title="Latest paper cycle"
-              subtitle="EMA crossover → risk → paper fill (simulated)"
+              title="Latest execution activity"
+              subtitle="Strategy → risk → paper fill (simulated)"
               actions={
                 <Badge
                   tone={
@@ -294,7 +343,10 @@ export default function OverviewPage() {
               <dl className="grid gap-3 text-[11px] font-mono sm:grid-cols-2 lg:grid-cols-3">
                 <div className="min-w-0">
                   <dt className="text-terminal-dim">Reason</dt>
-                  <dd className="mt-1 truncate text-terminal-text" title={String(lastCycle.signal_reason ?? "—")}>
+                  <dd
+                    className="mt-1 truncate text-terminal-text"
+                    title={String(lastCycle.signal_reason ?? "—")}
+                  >
                     {String(lastCycle.signal_reason ?? "—")}
                   </dd>
                 </div>
@@ -364,6 +416,26 @@ export default function OverviewPage() {
           )}
         </>
       )}
+
+      <Card
+        title="System status"
+        subtitle="Readiness · scheduler · reconciliation · last cycle (UTC)"
+        actions={
+          system.status === "success" ? (
+            <Badge tone="accent">LIVE FEED</Badge>
+          ) : system.status === "loading" ? (
+            <Badge tone="neutral">LOADING</Badge>
+          ) : (
+            <Badge tone="danger">ERROR</Badge>
+          )
+        }
+      >
+        {system.status === "loading" && <LoadingState label="Loading system status…" />}
+        {system.status === "error" && (
+          <ErrorState message={system.error} onRetry={system.reload} />
+        )}
+        {system.status === "success" && <SystemStatusPanel data={system.data} />}
+      </Card>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-2">
         <Card title="Equity curve" subtitle="Mark-to-market equity over recent sessions">

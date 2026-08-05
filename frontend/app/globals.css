@@ -38,6 +38,7 @@ body {
     linear-gradient(180deg, #0a0f14 0%, var(--bg) 40%, #050709 100%);
   background-attachment: fixed;
   font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
 }
 

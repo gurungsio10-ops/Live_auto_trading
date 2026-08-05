@@ -52,9 +52,9 @@ export default function OrdersPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="font-display text-2xl tracking-[0.08em] uppercase">Orders</h1>
+        <h1 className="font-display text-2xl tracking-[0.08em] uppercase">Trade</h1>
         <p className="mt-1 text-xs text-terminal-dim">
-          Filter by status, symbol, and date. Submit paper tickets via proxy.
+          Paper order ticket and history. Every order passes the risk engine.
         </p>
       </div>
       <DemoBanner demo={meta?.demo} backendError={meta?.backend_error} />
@@ -105,60 +105,124 @@ export default function OrdersPage() {
             (data.length === 0 ? (
               <EmptyState title="No orders match" description="Adjust filters or submit a ticket." />
             ) : (
-              <Table
-                headers={[
-                  "Time",
-                  "Symbol",
-                  "Side",
-                  "Type",
-                  "Qty",
-                  "Fill px",
-                  "Status",
-                  "Risk",
-                  "Strategy",
-                ]}
-              >
-                {data.map((o) => (
-                  <tr key={o.id} className="hover:bg-terminal-muted/40">
-                    <Td className="text-terminal-dim whitespace-nowrap">
-                      {formatTs(o.created_at)}
-                    </Td>
-                    <Td className="text-terminal-accent">{o.symbol}</Td>
-                    <Td className={o.side === "buy" ? "text-gain" : "text-loss"}>
-                      {o.side}
-                    </Td>
-                    <Td>{o.order_type}</Td>
-                    <Td>
-                      {formatQty(o.filled_quantity)}/{formatQty(o.quantity)}
-                    </Td>
-                    <Td>
-                      {o.average_fill_price
-                        ? formatMoney(o.average_fill_price)
-                        : o.price
-                          ? formatMoney(o.price)
-                          : "—"}
-                    </Td>
-                    <Td mono={false}>
-                      <Badge
-                        tone={
-                          o.status === "FILLED"
-                            ? "gain"
-                            : o.status === "REJECTED" || o.status === "FAILED"
-                              ? "loss"
-                              : "neutral"
-                        }
-                      >
-                        {o.status}
-                      </Badge>
-                    </Td>
-                    <Td className="text-[10px]">
-                      {o.risk_decision ?? "—"}
-                      {o.risk_reason_code ? ` · ${o.risk_reason_code}` : ""}
-                    </Td>
-                    <Td>{o.strategy_name ?? "—"}</Td>
-                  </tr>
-                ))}
-              </Table>
+              <>
+                <ul className="space-y-2 md:hidden" data-testid="orders-cards">
+                  {data.map((o) => (
+                    <li
+                      key={o.id}
+                      className="border border-terminal-border bg-terminal-elevated/40 px-3 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate font-display text-sm text-terminal-accent">
+                            {o.symbol}
+                          </p>
+                          <p className="mt-1 text-[11px] font-mono text-terminal-dim">
+                            {formatTs(o.created_at)}
+                          </p>
+                        </div>
+                        <Badge
+                          tone={
+                            o.status === "FILLED"
+                              ? "gain"
+                              : o.status === "REJECTED" || o.status === "FAILED"
+                                ? "loss"
+                                : "neutral"
+                          }
+                        >
+                          {o.status}
+                        </Badge>
+                      </div>
+                      <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px] font-mono">
+                        <div>
+                          <dt className="text-terminal-dim">Side</dt>
+                          <dd className={o.side === "buy" ? "text-gain" : "text-loss"}>
+                            {o.side}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-terminal-dim">Qty</dt>
+                          <dd className="tabular-nums">
+                            {formatQty(o.filled_quantity)}/{formatQty(o.quantity)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-terminal-dim">Fill</dt>
+                          <dd className="tabular-nums">
+                            {o.average_fill_price
+                              ? formatMoney(o.average_fill_price)
+                              : o.price
+                                ? formatMoney(o.price)
+                                : "—"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-terminal-dim">Risk</dt>
+                          <dd className="truncate">
+                            {o.risk_decision ?? "—"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden md:block">
+                  <Table
+                    headers={[
+                      "Time",
+                      "Symbol",
+                      "Side",
+                      "Type",
+                      "Qty",
+                      "Fill px",
+                      "Status",
+                      "Risk",
+                      "Strategy",
+                    ]}
+                  >
+                    {data.map((o) => (
+                      <tr key={o.id} className="hover:bg-terminal-muted/40">
+                        <Td className="text-terminal-dim whitespace-nowrap">
+                          {formatTs(o.created_at)}
+                        </Td>
+                        <Td className="text-terminal-accent">{o.symbol}</Td>
+                        <Td className={o.side === "buy" ? "text-gain" : "text-loss"}>
+                          {o.side}
+                        </Td>
+                        <Td>{o.order_type}</Td>
+                        <Td>
+                          {formatQty(o.filled_quantity)}/{formatQty(o.quantity)}
+                        </Td>
+                        <Td>
+                          {o.average_fill_price
+                            ? formatMoney(o.average_fill_price)
+                            : o.price
+                              ? formatMoney(o.price)
+                              : "—"}
+                        </Td>
+                        <Td mono={false}>
+                          <Badge
+                            tone={
+                              o.status === "FILLED"
+                                ? "gain"
+                                : o.status === "REJECTED" || o.status === "FAILED"
+                                  ? "loss"
+                                  : "neutral"
+                            }
+                          >
+                            {o.status}
+                          </Badge>
+                        </Td>
+                        <Td className="text-[10px]">
+                          {o.risk_decision ?? "—"}
+                          {o.risk_reason_code ? ` · ${o.risk_reason_code}` : ""}
+                        </Td>
+                        <Td>{o.strategy_name ?? "—"}</Td>
+                      </tr>
+                    ))}
+                  </Table>
+                </div>
+              </>
             ))}
         </Card>
       </div>

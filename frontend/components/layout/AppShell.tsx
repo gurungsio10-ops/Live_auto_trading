@@ -2,10 +2,11 @@
 
 import { ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { MobileNav, Sidebar } from "./Sidebar";
+import { Sidebar } from "./Sidebar";
+import { MobileBottomNav } from "./MobileBottomNav";
 import { SessionBar } from "./SessionBar";
+import { AtlasFooter } from "./AtlasFooter";
 
-// Routes that render without the dashboard chrome (sidebar/header).
 const BARE_ROUTES = ["/login"];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -30,8 +31,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <SessionBar />
         </header>
-        <MobileNav />
-        <main className="min-w-0 flex-1 overflow-x-hidden p-4 md:p-6">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden p-4 pb-24 md:p-6 lg:pb-6">
+          {children}
+        </main>
+        <AtlasFooter className="hidden lg:block" />
+        <MobileBottomNav />
       </div>
     </div>
   );

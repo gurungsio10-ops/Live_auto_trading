@@ -74,3 +74,16 @@ async def test_force_start_and_stop(monkeypatch):
     await sched.resume_scheduler()
     await sched.stop_scheduler()
     assert sched.scheduler_status()["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_start_stop_idempotent(monkeypatch):
+    """Repeated start/stop must be safe (no crash, stable running flag)."""
+    monkeypatch.setenv("ENABLE_TRADING_SCHEDULER", "false")
+    get_settings.cache_clear()
+    sched.start_scheduler(force=True)
+    sched.start_scheduler(force=True)  # second start while running
+    assert sched.scheduler_status()["running"] is True
+    await sched.stop_scheduler()
+    await sched.stop_scheduler()  # second stop while stopped
+    assert sched.scheduler_status()["running"] is False
