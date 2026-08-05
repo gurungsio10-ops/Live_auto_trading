@@ -44,7 +44,7 @@ Key behaviours to know:
 - Recovery dashboard: `/recovery` (BFF `/api/recovery/*`). Clear-halt needs confirm `CLEAR_RECONCILIATION_HALT` + server-side admin token.
 - Accounting invariants: `app/accounting/invariants.py` (wired after paper cycles; soak writes `artifacts/soak/invariants.json`).
 - Soak harness: `python -m app.cli paper-soak --seed 42` (use `--max-cycles` in CI). No exchange credentials required.
-- Coverage gate is **85%** (`pyproject.toml` / CI). Omits advisory/disabled paths (`app/ai/*`, `app/execution/exchange/*`, `app/api/mvp.py`, `app/cli.py`, `app/news/*`, deprecated `market_data/service.py`).
+- Coverage gate is **85%** with **`precision = 2`** (`pyproject.toml` / CI `--cov-precision=2`). Default coverage precision=0 used to round 84.x% → 85 and leave pytest exit 0 while the terminal still printed FAIL — do not remove precision=2 or the hard `coverage.report()` assert in CI. Omits advisory/disabled paths (`app/ai/*`, `app/execution/exchange/*`, `app/api/mvp.py`, `app/cli.py`, `app/news/*`, deprecated `market_data/service.py`).
 - **Every order still routes through the risk engine** (`OrderGateway` → `app/risk/engine.py`) before the paper engine — nothing bypasses risk checks.
 - Canonical cycle path: `run_paper_trading_cycle` with DB cycle locks (`cycle_locks`), journal attachment, post-cycle reconciliation, and fail-closed readiness when reconciliation is unhealthy. See `docs/operations/recovery_runbook.md`.
 - Shared DB pool: use `app.db.base.session_scope` / `get_shared_engine` (not per-request `create_engine().dispose()`). `CYCLE_LOCK_FAIL_CLOSED=true` rejects cycles when the lock layer is unavailable.

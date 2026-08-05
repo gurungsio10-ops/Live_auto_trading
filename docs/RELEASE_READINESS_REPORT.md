@@ -1,20 +1,22 @@
 # Release Readiness Report — Atlas Paper v1
 
 **Branch:** `release/atlas-paper-v1`  
+**PR:** [#34](https://github.com/gurungsio10-ops/Live_auto_trading/pull/34)  
 **Base tip:** PR #28 `cursor/codespaces-auto-start-e3a2` (`2ed644a`) + consolidation commits  
-**Report date:** 2026-08-05 (UTC)  
+**Report date:** 2026-08-05 (UTC, release-engineer pass)  
 **Companion docs:** `docs/PR_CONSOLIDATION_AUDIT.md`, `docs/MOBILE_UI_AUDIT.md`
 
 ## Honest completion percentages
 
 | Area | % | Notes |
 |------|--:|-------|
-| Codebase architecture | **88%** | Canonical paper cycle → risk → paper broker → dual-write; some dashboard mutators still need careful MD freshness |
-| Paper trading | **90%** | Deterministic cycles, strategies, scheduler, kill switch, restart hydrate verified on Postgres for cycle path |
+| Codebase architecture | **90%** | Canonical paper cycle → risk → paper broker → dual-write; hydrate account/legacy fallbacks covered |
+| Paper trading | **92%** | Deterministic cycles, strategies, scheduler, kill switch, restart hydrate; coverage ≥85.00% with precision=2 |
 | Testnet | **55%** | Bybit/public MD + offline fallback present; Binance Spot Testnet pipeline remains on PR #20 (not merged) |
 | Mobile UI | **85%** | Required IA + viewports verified; polish remaining on dense action wrap |
-| Deployment readiness | **80%** | Compose validates; Codespaces scripts present; production secrets/ops still manual |
+| Deployment readiness | **82%** | Compose validates; Codespaces scripts present; CI coverage gate hardened |
 | Live-money readiness | **0%** | Intentionally hard-blocked; `LiveTradingGate.allowed` always false |
+| **Overall paper-v1** | **~91%** | Merge-ready pending human review + green Actions on latest tip |
 
 ## What is complete
 
@@ -40,22 +42,22 @@
 - Control-centre / premium UI from PRs #31–#33 not merged (backend CI red / API divergence)
 - Live trading remains impossible by design
 
-## Automated verification (executed)
+## Automated verification (executed — release-engineer pass)
 
 | Check | Result |
 |-------|--------|
-| `pytest tests/unit -q` | **254 passed** |
-| `pytest` (earlier full tip before final edits) | **294 passed** |
+| `pytest --cov=app --cov-fail-under=85 --cov-precision=2` | **301 passed**, coverage **85.54%** |
+| `pytest tests/unit -q` (subset invariants) | **passed** (incl. hydrate / kill-switch / secrets / TRADING_MODE) |
 | `ruff check app tests` | **passed** |
 | `ruff format --check app tests` | **passed** |
 | `mypy app` | **passed** (106 files) |
-| `alembic upgrade head` (Postgres) | **passed** |
-| `npm --prefix frontend run lint` | **passed** |
-| `npm --prefix frontend run typecheck` | **passed** |
-| `npm --prefix frontend run build` | **passed** |
+| `alembic upgrade head` (SQLite migrate DB) | **passed** → `0006_paper_durable` |
+| `npm --prefix frontend ci` / lint / typecheck / build | **passed** |
 | `docker compose config` | **passed** |
-| `node frontend/scripts/check-mobile-nav.mjs` | **passed** |
-| Playwright viewports 320–1440 | **passed** (no horizontal overflow; nav IA correct) |
+| `node frontend/scripts/check-mobile-nav.mjs` | **passed** (320–1440) |
+| Secret scan | CI `gitleaks-action` **SUCCESS** on PR #34 |
+| `pip-audit` after `ccxt>=4.5.71` | **no known vulns** |
+| `npm audit` | Next 14 / nested postcss **high** advisories; fix requires Next 16 (breaking) — deferred |
 
 ## Smoke test (executed against Postgres + Redis)
 
@@ -93,11 +95,15 @@
 
 ## Exact manual steps remaining
 
-1. Merge `release/atlas-paper-v1` → `main` after human review.  
-2. Close superseded PRs listed in `docs/PR_CONSOLIDATION_AUDIT.md`.  
-3. Optionally open follow-up to land PR #20 testnet behind flags.  
-4. Rotate any demo `ADMIN_API_TOKEN` / dashboard passwords before shared hosting.  
-5. Run `python -m app.cli paper-soak --seed 42` on staging Postgres overnight if desired.
+Follow `docs/PR_CONSOLIDATION_AUDIT.md` § “Exact human steps in GitHub”:
+
+1. Mark PR #34 ready for review.  
+2. Merge PR #34 → `main` with a **merge commit** only when Actions are green.  
+3. Close superseded PRs (#3–#18, #21–#28, #29–#32) without merging.  
+4. Keep PR #20 open (testnet).  
+5. Rebase PR #33 onto post-merge `main` before any future integration.  
+6. Rotate demo `ADMIN_API_TOKEN` / dashboard passwords before shared hosting.  
+7. Optional: `python -m app.cli paper-soak --seed 42` on staging Postgres.
 
 ## Live-money readiness
 
