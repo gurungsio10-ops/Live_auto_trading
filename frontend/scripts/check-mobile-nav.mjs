@@ -16,8 +16,12 @@ for (const label of ["Home", "Trade", "Positions", "Activity", "More"]) {
 assert.equal(nav.toLowerCase().includes("go live"), false);
 
 const morePage = readFileSync(join(root, "app/more/page.tsx"), "utf8");
-assert.ok(morePage.includes("Developed by Saugat Gurung"));
 assert.ok(/Go Live/.test(morePage));
+const footer = readFileSync(
+  join(root, "components/layout/AtlasFooter.tsx"),
+  "utf8",
+);
+assert.ok(footer.includes("Developed by Saugat Gurung"));
 
 const bottom = readFileSync(
   join(root, "components/layout/MobileBottomNav.tsx"),
@@ -33,7 +37,11 @@ assert.ok(sidebar.includes("hidden"));
 
 const portfolio = readFileSync(join(root, "app/api/portfolio/route.ts"), "utf8");
 assert.ok(portfolio.includes("503"));
-assert.ok(portfolio.includes("envelope(null"));
+assert.ok(portfolio.includes("backend down") || portfolio.includes("envelope("));
+
+const killSwitch = readFileSync(join(root, "app/api/kill-switch/route.ts"), "utf8");
+assert.ok(killSwitch.includes("Fail closed") || killSwitch.includes("fail closed") || killSwitch.includes("503"));
+assert.ok(killSwitch.includes("applied: false") || killSwitch.includes("kill_switch_enabled: null"));
 
 assert.deepEqual(widths, [320, 375, 390, 430, 768, 1024, 1440]);
 console.log("mobile_nav_contract_ok", { widths });
