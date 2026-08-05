@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     market_data_stale_seconds: int = Field(
         default=30, ge=1, validation_alias="MARKET_DATA_STALE_SECONDS"
     )
+
+    # Paper scheduler — disabled by default; never starts live trading.
+    scheduler_enabled: bool = Field(default=False, validation_alias="SCHEDULER_ENABLED")
+    scheduler_interval_seconds: int = Field(
+        default=60, ge=5, le=3600, validation_alias="SCHEDULER_INTERVAL_SECONDS"
+    )
     webhook_alert_url: str | None = None
 
     # Paper execution (env-driven; Decimal only)

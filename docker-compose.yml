@@ -24,3 +24,39 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # Optional full-stack profile: docker compose --profile apps up --build
+  backend:
+    profiles: ["apps"]
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      TRADING_MODE: paper
+      LIVE_TRADING_ENABLED: "false"
+      SCHEDULER_ENABLED: "false"
+      DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlas
+      REDIS_URL: redis://redis:6379/0
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-local-dev-admin-token}
+      ATLAS_AUTH_SECRET: ${ATLAS_AUTH_SECRET:-atlas-dev-secret-change-me}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    profiles: ["apps"]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      ATLAS_BACKEND_URL: http://backend:8000
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-local-dev-admin-token}
+      ATLAS_AUTH_SECRET: ${ATLAS_AUTH_SECRET:-atlas-dev-secret-change-me}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

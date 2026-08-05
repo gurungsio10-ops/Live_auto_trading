@@ -21,6 +21,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 import app.auth.store
 import app.journal.store
 import app.models.database.market
+import app.models.database.ops
 import app.models.database.portfolio  # noqa: F401 — paper-slice tables
 from app.core.config import get_settings
 from app.core.time import from_unix_ms
@@ -33,6 +34,23 @@ def _clear_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _bind_test_database():
+    """Give every test a fresh shared in-memory DB with full metadata."""
+    import app.db.base as db_base
+
+    url = "sqlite+aiosqlite:///:memory:?cache=shared"
+    engine = create_async_engine(url, connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    db_base.engine = engine
+    db_base.SessionLocal = async_sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+    yield
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture

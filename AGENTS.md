@@ -21,8 +21,10 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 ### Test / lint
 
 - Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
-- Frontend: `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`). No dedicated frontend unit-test script yet.
+- Frontend: `npm --prefix frontend run lint`, `npm --prefix frontend run typecheck`, `npm --prefix frontend run test`, `npm --prefix frontend run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`). No dedicated frontend unit-test framework yet — `npm test` runs a secret-exposure smoke check.
 - Tailwind gotcha: use `text-foreground` / `text-brand` for copy colours — `text-primary` clashes with the primary button colour scale.
+- Paper portfolio state is **durable** (hydrate on startup / persist after mutations). Run `alembic upgrade head` (through `0006_paper_durable`). Scheduler is **disabled by default** (`SCHEDULER_ENABLED=false`) and never starts live trading.
+- New ops UI routes: `/paper-trading`, `/scheduler`, `/system-health`, `/audit`. Admin-gated scheduler/reset use server-side `ADMIN_API_TOKEN` only.
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
 

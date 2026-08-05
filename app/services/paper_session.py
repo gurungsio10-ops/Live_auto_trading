@@ -1,15 +1,19 @@
 """
-In-memory paper-trading session that wires the real engines together.
+Paper-trading session that wires the real engines together.
 
 This is the live data source behind the dashboard endpoints. Every order still
 flows through ``app/risk/engine.py`` (via ``OrderGateway``) before touching the
-paper execution engine — nothing here bypasses risk checks. State is process-local
-and resets on restart, which is appropriate for a paper/demo session.
+paper execution engine — nothing here bypasses risk checks.
+
+Working state is held in memory for latency; durable balances/positions/snapshots
+are hydrated from the database on startup and persisted after mutations.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import math
 from decimal import Decimal
 from threading import RLock
@@ -41,6 +45,8 @@ from app.models.domain.trading import (
 from app.risk.engine import RiskContext, RiskEngine, RiskEngineState
 from app.strategies.base import StrategyConfig, StrategyContext
 from app.strategies.registry import get_strategy, list_strategies
+
+logger = logging.getLogger(__name__)
 
 # Reference prices used to synthesise a deterministic paper market per symbol.
 _BASE_PRICES: dict[str, Decimal] = {
@@ -314,6 +320,10 @@ class PaperSession:
             self.order_history.insert(0, order)
             self._log_risk_event(order, requested=quantity)
             self._record_equity_point()
+            await self._persist_safe(
+                message=f"Risk rejected order for {symbol}",
+                order=order,
+            )
             return order
 
         self.order_history.insert(0, order)
@@ -330,6 +340,10 @@ class PaperSession:
                 self._consecutive_losses = 0
 
         self._record_equity_point()
+        await self._persist_safe(
+            message=f"Order {order.status.value} for {symbol}",
+            order=order,
+        )
         return order
 
     def _synth_rejected_order(
@@ -586,6 +600,35 @@ class PaperSession:
 
     # ------------------------------------------------------------ safety controls
 
+    async def _persist_safe(
+        self,
+        *,
+        message: str,
+        order: Order | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        try:
+            from app.services.paper_persistence import persist_paper_session
+
+            await persist_paper_session(
+                self,
+                correlation_id=correlation_id,
+                journal_message=message,
+                order=order,
+            )
+        except Exception:
+            logger.exception("paper_persist_failed")
+
+    def _schedule_persist(self, message: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._persist_tasks = getattr(self, "_persist_tasks", set())
+        task = loop.create_task(self._persist_safe(message=message))
+        self._persist_tasks.add(task)
+        task.add_done_callback(self._persist_tasks.discard)
+
     def set_kill_switch(self, enabled: bool) -> dict[str, Any]:
         with self._lock:
             self.kill_switch_enabled = enabled
@@ -605,12 +648,18 @@ class PaperSession:
                         "order_id": None,
                     },
                 )
-            return {"kill_switch_enabled": enabled}
+            result = {"kill_switch_enabled": enabled}
+        self._schedule_persist(
+            "Kill switch activated" if enabled else "Kill switch deactivated"
+        )
+        return result
 
     def set_paused(self, paused: bool) -> dict[str, Any]:
         with self._lock:
             self.trading_paused = paused
-            return self.portfolio_summary()
+            result = self.portfolio_summary()
+        self._schedule_persist("Trading paused" if paused else "Trading resumed")
+        return result
 
     # ------------------------------------------------------------------ strategy
 
