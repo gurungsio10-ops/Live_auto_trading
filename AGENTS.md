@@ -62,3 +62,5 @@ Key behaviours to know:
 - Frontend: `/performance`, `/trades`, `/trades/[id]`, `/reports` (BFF `/api/analytics/[...path]`).
 - Closed trades are recorded on SELL fills via `PaperSession` / `TradingOrchestrator` (idempotent by trade id `ct-{fill_id}`).
 - Continuous paper runner remains `trading_scheduler` (resume/hydrate/idempotent cycles); analytics logging is attached on cycle complete.
+- Release evidence: `docs/release/PAPER_V1_PR_AUDIT.md`, `docs/release/PAPER_V1_ACCEPTANCE_REPORT.md`, harness `scripts/paper_v1_acceptance.py`.
+- Persistence gotcha: `save_paper_checkpoint` must `flush()` after deleting `positions` rows before re-inserting the same symbol (SQLite UNIQUE), or restart dual-write can IntegrityError.

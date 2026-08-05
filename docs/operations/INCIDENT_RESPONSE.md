@@ -97,6 +97,8 @@ Do **not** enable live money trading. Even with all of the following, submission
 
 ## Related
 
+- `docs/operations/DEPLOYMENT_RUNBOOK.md`
+- `docs/operations/BACKUP_RESTORE.md`
 - `docs/operations/RUNBOOK.md`
 - `docs/security/THREAT_MODEL.md`
 - `app/execution/live_gate.py`

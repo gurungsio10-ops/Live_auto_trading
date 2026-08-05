@@ -9,35 +9,41 @@ Banner: **PAPER TRADING — NO REAL FUNDS**
 
 ## Authoritative release branch
 
-**`release/atlas-paper-v1`** consolidates the verified paper lineage (PR **#28** tip, including PR **#23** production readiness and #21–#27 ancestors).
+**`release/atlas-paper-v1`** (PR **#34**) consolidates the verified paper lineage (#21–#28) plus PR **#35** performance analytics. Target tag: **`v1.0.0-paper`**.
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/PR_CONSOLIDATION_AUDIT.md` | Open PR map, overlap, close recommendations |
-| `docs/RELEASE_READINESS_REPORT.md` | Honest completion %, verification results, blockers |
+| `docs/release/PAPER_V1_PR_AUDIT.md` | Evidence-based open PR decisions (SHA / merge-base) |
+| `docs/release/PAPER_V1_ACCEPTANCE_REPORT.md` | Deterministic acceptance evidence |
+| `docs/PR_CONSOLIDATION_AUDIT.md` | Earlier consolidation map |
+| `docs/RELEASE_READINESS_REPORT.md` | Completion % / blockers |
 | `docs/MOBILE_UI_AUDIT.md` | Viewport evidence 320–1440 + mobile IA |
+| `docs/operations/DEPLOYMENT_RUNBOOK.md` | Paper deploy bring-up |
+| `docs/operations/BACKUP_RESTORE.md` | Backup / restore |
+| `docs/operations/INCIDENT_RESPONSE.md` | Kill switch / secrets / recon incidents |
 
 ## What works today
 
 - Deterministic paper cycles (offline fixtures by default; public Bybit MD optional)
 - Strategies: **EMA crossover**, **EMA + RSI**, **RSI mean reversion**, **Donchian breakout**
-- Durable paper account / risk / strategy persistence (Alembic **`0006_paper_durable`**)
+- Durable paper account / risk / strategy persistence (Alembic through **`0007_perf_analytics`**)
+- Persistent closed-trade journal + performance metrics / reports / CSV+JSON export
 - Restart-safe hydration + fail-closed reconciliation
 - Continuous scheduler with explicit start/stop; kill switch; cycle locks; idempotency
 - Next-bar SL/TP evaluation on the paper path; backtests; journal / audit trail
 - Admin authentication for mutating operations; fail-closed Next.js BFF proxies
 - Health, readiness, metrics; webhook alert hooks; Docker Compose + Codespaces helpers
-- Mobile-first ops UI: Home / Trade / Positions / Activity / More (+ desktop sidebar ≥ lg)
+- Mobile-first ops UI: Home / Trade / Positions / Activity / More (+ `/performance`, `/trades`, `/reports`)
 
 ## Architecture
 
 ```text
 Market data → candle validation → strategy → signal → OrderGateway → RiskEngine
   → paper engine → PaperSession + journal + dual-write persistence
-  → /api/v1 + dashboard (+ /recovery) + mobile bottom nav
+  → analytics (closed trades / performance) → /api + dashboard
 ```
 
-Historical audits under `docs/audits/` and `docs/audit/` remain reference material; prefer the three release docs above for merge decisions.
+Historical audits under `docs/audits/` and `docs/audit/` remain reference material; prefer the release docs above for merge decisions.
 
 ## Migrations
 
@@ -49,6 +55,7 @@ Historical audits under `docs/audits/` and `docs/audit/` remain reference materi
 | `0004_paper_slice` | balances, positions, snapshots, system_state, … |
 | `0005_cycle_ops` | cycle_locks, scheduler_runs, reconciliation_reports |
 | `0006_paper_durable` | paper_accounts, risk_state, strategy_state, processed_cycle_keys, equity_snapshots, kill_switch_events |
+| `0007_perf_analytics` | closed_trades, performance_reports |
 
 ```bash
 alembic upgrade head

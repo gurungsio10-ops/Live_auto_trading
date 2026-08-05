@@ -298,10 +298,13 @@ async def save_paper_checkpoint(
         bal.locked = reserved_cash
         bal.as_of = now
 
-    # Replace positions
+    # Replace positions (flush deletes before inserts — SQLite UNIQUE(symbol)
+    # otherwise fails when the same symbol is re-inserted in one flush).
     existing = (await session.execute(select(PositionORM))).scalars().all()
     for row in existing:
         await session.delete(row)
+    if existing:
+        await session.flush()
     for symbol, pos in positions.items():
         session.add(
             PositionORM(

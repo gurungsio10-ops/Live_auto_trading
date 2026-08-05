@@ -9,7 +9,15 @@ title = "Atlas gitleaks"
 useDefault = true
 
 [allowlist]
-description = "Documented local-dev ADMIN_API_TOKEN placeholder (paper/dev only)"
+description = "Documented local-dev ADMIN_API_TOKEN placeholder (paper/dev only) + intentional redaction fixtures"
 regexes = [
   '''local-dev-admin-token''',
+  '''shhh-1234567890-abcdef''',
+  '''AKIA_SUPER_SECRET_KEY_1234567890''',
+  '''totally-secret-value-abcdefghijklmnop''',
+  '''approval-token-zzzz-9999-secret-value''',
+]
+paths = [
+  '''tests/unit/test_log_redaction\.py''',
+  '''frontend/\.next/.*''',
 ]
