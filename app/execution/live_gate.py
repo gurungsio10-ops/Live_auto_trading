@@ -1,4 +1,9 @@
-"""Phase 14 — live trading gating checklist (all 9 conditions required)."""
+"""Phase 14 — live trading gating checklist (all conditions required).
+
+Live order submission remains hard-blocked in this development phase even when
+the operational checklist is complete. Use ``checklist_complete`` to inspect
+readiness without enabling live execution.
+"""
 
 from __future__ import annotations
 
@@ -8,18 +13,12 @@ from typing import Any
 from app.core.config import Settings, get_settings
 from app.models.domain.enums import RiskReasonCode
 
-
-@dataclass(frozen=True)
-class LiveGateResult:
-    allowed: bool
-    failed_conditions: list[str]
-    reason_code: RiskReasonCode | None = None
-    details: dict[str, Any] | None = None
-
+LIVE_STARTUP_ACK_VALUE = "I_UNDERSTAND_LIVE_TRADING_RISKS"
 
 LIVE_CONDITIONS = (
     "trading_mode_live",
     "live_trading_enabled",
+    "live_startup_ack",
     "kill_switch_off",
     "valid_credentials",
     "risk_engine_healthy",
@@ -28,6 +27,15 @@ LIVE_CONDITIONS = (
     "reconciliation_healthy",
     "valid_live_approval_token",
 )
+
+
+@dataclass(frozen=True)
+class LiveGateResult:
+    allowed: bool
+    failed_conditions: list[str]
+    reason_code: RiskReasonCode | None = None
+    details: dict[str, Any] | None = None
+    checklist_complete: bool = False
 
 
 @dataclass
@@ -45,7 +53,9 @@ class LiveReadinessState:
 class LiveTradingGate:
     """
     Hard gate for live order submission.
-    No shortcut may activate live trading with fewer than all 9 conditions.
+
+    Every checklist condition must pass for ``checklist_complete``.
+    ``allowed`` is always False in this phase (live execution hard-blocked).
     """
 
     def __init__(
@@ -57,9 +67,11 @@ class LiveTradingGate:
         self.state = state or LiveReadinessState()
 
     def evaluate(self) -> LiveGateResult:
+        ack = (self.settings.live_startup_ack or "").strip()
         checks = {
             "trading_mode_live": self.settings.trading_mode == "live",
             "live_trading_enabled": self.settings.live_trading_enabled is True,
+            "live_startup_ack": ack == LIVE_STARTUP_ACK_VALUE,
             "kill_switch_off": self.settings.kill_switch_enabled is False,
             "valid_credentials": self.settings.has_exchange_credentials,
             "risk_engine_healthy": self.state.risk_engine_healthy,
@@ -70,21 +82,38 @@ class LiveTradingGate:
         }
         assert set(checks) == set(LIVE_CONDITIONS)
         failed = [name for name, ok in checks.items() if not ok]
+        checklist_complete = len(failed) == 0
+        # Hard-block: never allow live order submission from this evaluator.
         if failed:
             reason = _reason_for(failed[0])
             return LiveGateResult(
                 allowed=False,
                 failed_conditions=failed,
                 reason_code=reason,
-                details=checks,
+                details={**checks, "live_execution_hard_blocked": True},
+                checklist_complete=False,
             )
-        return LiveGateResult(allowed=True, failed_conditions=[], details=checks)
+        return LiveGateResult(
+            allowed=False,
+            failed_conditions=[],
+            reason_code=RiskReasonCode.LIVE_TRADING_DISABLED,
+            details={
+                **checks,
+                "live_execution_hard_blocked": True,
+                "note": (
+                    "Checklist complete but live submission is hard-disabled "
+                    "in this development phase"
+                ),
+            },
+            checklist_complete=checklist_complete,
+        )
 
 
 def _reason_for(condition: str) -> RiskReasonCode:
     return {
         "trading_mode_live": RiskReasonCode.LIVE_GATING_INCOMPLETE,
         "live_trading_enabled": RiskReasonCode.LIVE_TRADING_DISABLED,
+        "live_startup_ack": RiskReasonCode.LIVE_GATING_INCOMPLETE,
         "kill_switch_off": RiskReasonCode.KILL_SWITCH_ACTIVE,
         "valid_credentials": RiskReasonCode.INVALID_CREDENTIALS,
         "risk_engine_healthy": RiskReasonCode.RISK_ENGINE_UNHEALTHY,

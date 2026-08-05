@@ -32,6 +32,8 @@ class PerformanceMetrics:
     consecutive_losses: int
     fees_paid: Decimal
     slippage_cost: Decimal
+    cagr: Decimal = Decimal("0")
+    average_trade: Decimal = Decimal("0")
 
     def to_dict(self) -> dict[str, Any]:
         raw = asdict(self)
@@ -87,6 +89,7 @@ def compute_metrics(
 
     cons_w = _max_streak(pnls, winning=True)
     cons_l = _max_streak(pnls, winning=False)
+    average_trade = expectancy
 
     # Approximate exposure as fraction of bars with open trade intervals
     exposure = Decimal("0")
@@ -101,6 +104,8 @@ def compute_metrics(
         exposure = (
             Decimal(in_trade) / Decimal(total_bars) if total_bars else Decimal("0")
         )
+
+    cagr_value = _cagr(equity_curve, initial_cash, final_equity)
 
     return PerformanceMetrics(
         total_return=total_return,
@@ -124,7 +129,30 @@ def compute_metrics(
         consecutive_losses=cons_l,
         fees_paid=fees,
         slippage_cost=slip,
+        cagr=cagr_value,
+        average_trade=average_trade,
     )
+
+
+def _cagr(
+    equity_curve: list[tuple[datetime, Decimal]],
+    initial_cash: Decimal,
+    final_equity: Decimal,
+) -> Decimal:
+    if len(equity_curve) < 2 or initial_cash <= 0 or final_equity <= 0:
+        return Decimal("0")
+    start_t = equity_curve[0][0]
+    end_t = equity_curve[-1][0]
+    days = max((end_t - start_t).total_seconds() / 86400.0, 1.0)
+    years = days / 365.25
+    if years <= 0:
+        return Decimal("0")
+    ratio = float(final_equity / initial_cash)
+    try:
+        cagr = ratio ** (1.0 / years) - 1.0
+    except Exception:
+        return Decimal("0")
+    return Decimal(str(cagr)).quantize(Decimal("0.0001"))
 
 
 def _bar_returns(equity_curve: list[tuple[datetime, Decimal]]) -> list[Decimal]:

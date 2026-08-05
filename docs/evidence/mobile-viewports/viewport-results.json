@@ -1,0 +1,65 @@
+[
+  {
+    "width": 320,
+    "bottomNavVisible": true,
+    "sidebarVisible": false,
+    "overflowX": false,
+    "scrollWidth": 320,
+    "clientWidth": 320,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-320.png"
+  },
+  {
+    "width": 375,
+    "bottomNavVisible": true,
+    "sidebarVisible": false,
+    "overflowX": false,
+    "scrollWidth": 375,
+    "clientWidth": 375,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-375.png"
+  },
+  {
+    "width": 390,
+    "bottomNavVisible": true,
+    "sidebarVisible": false,
+    "overflowX": false,
+    "scrollWidth": 390,
+    "clientWidth": 390,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-390.png"
+  },
+  {
+    "width": 430,
+    "bottomNavVisible": true,
+    "sidebarVisible": false,
+    "overflowX": false,
+    "scrollWidth": 430,
+    "clientWidth": 430,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-430.png"
+  },
+  {
+    "width": 768,
+    "bottomNavVisible": true,
+    "sidebarVisible": false,
+    "overflowX": false,
+    "scrollWidth": 768,
+    "clientWidth": 768,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-768.png"
+  },
+  {
+    "width": 1024,
+    "bottomNavVisible": false,
+    "sidebarVisible": true,
+    "overflowX": false,
+    "scrollWidth": 1024,
+    "clientWidth": 1024,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-1024.png"
+  },
+  {
+    "width": 1440,
+    "bottomNavVisible": false,
+    "sidebarVisible": true,
+    "overflowX": false,
+    "scrollWidth": 1440,
+    "clientWidth": 1440,
+    "screenshot": "/workspace/artifacts/mobile-viewports/home-1440.png"
+  }
+]

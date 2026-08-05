@@ -11,7 +11,7 @@ AI modules are never imported here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import uuid4
@@ -38,6 +38,10 @@ class CandleSource(Protocol):
     ) -> list[Candle]: ...
 
 
+# Stable anchor so offline fixture cycles are idempotent across retries.
+_OFFLINE_ANCHOR = datetime(2024, 1, 1, 0, 0, 0)
+
+
 @dataclass
 class OfflineCandleSource:
     """Deterministic offline candles for paper cycles without network."""
@@ -48,9 +52,11 @@ class OfflineCandleSource:
     async def load_closed_candles(
         self, symbol: str, timeframe: str, *, limit: int
     ) -> list[Candle]:
+
         candles = build_ema_crossover_candles(
             symbol=symbol,
             interval=timeframe,
+            start=_OFFLINE_ANCHOR.replace(tzinfo=UTC),
             base_price=self.base_price,
             force_buy_on_last=self.force_buy_on_last,
         )
@@ -95,6 +101,7 @@ class CycleResult:
     indicators: dict[str, Any] = field(default_factory=dict)
     idempotent_replay: bool = False
     message: str = ""
+    lock_status: str | None = None
 
 
 # Process-local cycle registry for dashboard/API (one shared orchestrator).
@@ -103,6 +110,35 @@ _LAST_CYCLE: CycleResult | None = None
 _LAST_SIGNAL: TradeSignal | None = None
 _STRATEGY_RUNS: list[StrategyRun] = []
 _PROCESSED_CYCLE_KEYS: set[tuple[str, str, str, datetime]] = set()
+
+
+def set_processed_cycle_keys(keys: set[tuple[str, str, str, str]]) -> None:
+    """Hydrate idempotency keys from durable storage (ISO open_time strings)."""
+    global _PROCESSED_CYCLE_KEYS
+    out: set[tuple[str, str, str, datetime]] = set()
+    for symbol, version, timeframe, open_iso in keys:
+        out.add(
+            (symbol, version, timeframe, ensure_utc(datetime.fromisoformat(open_iso)))
+        )
+    _PROCESSED_CYCLE_KEYS = out
+
+
+def export_processed_cycle_keys() -> set[tuple[str, str, str, str]]:
+    return {
+        (s, v, tf, ensure_utc(ts).isoformat()) for s, v, tf, ts in _PROCESSED_CYCLE_KEYS
+    }
+
+
+async def load_persisted_cycle_keys(session: Any) -> set[tuple[str, str, str, str]]:
+    from app.services import paper_persistence as store
+
+    return await store.load_cycle_keys(session)
+
+
+async def persist_cycle_keys(session: Any) -> None:
+    from app.services import paper_persistence as store
+
+    await store.save_cycle_keys(session, export_processed_cycle_keys())
 
 
 def _session_key(symbol: str, strategy_id: str) -> str:
@@ -121,15 +157,27 @@ def get_or_create_orchestrator(
     key = _session_key(symbol, strategy_id)
     existing = _CYCLE_ORCHESTRATORS.get(key)
     if existing is not None:
+        if journal is not None:
+            existing.journal = journal
         return existing
     strategy = get_strategy(strategy_id)
-    paper = paper_engine or PaperTradingEngine(
-        PaperConfig(
-            initial_cash=settings.paper_starting_balance,
-            fee_rate=settings.paper_fee_rate,
-            slippage_rate=settings.paper_slippage_rate,
-        )
-    )
+    if paper_engine is None:
+        # Prefer the singleton dashboard/runtime paper engine so restarts hydrate
+        # into the same ledger the API and scheduler use.
+        try:
+            from app.services.paper_session import get_paper_session
+
+            paper = get_paper_session().paper
+        except Exception:
+            paper = PaperTradingEngine(
+                PaperConfig(
+                    initial_cash=settings.paper_starting_balance,
+                    fee_rate=settings.paper_fee_rate,
+                    slippage_rate=settings.paper_slippage_rate,
+                )
+            )
+    else:
+        paper = paper_engine
     orch = TradingOrchestrator(
         strategy=strategy,
         session_id=f"cycle-{uuid4().hex[:12]}",
@@ -139,6 +187,18 @@ def get_or_create_orchestrator(
         strategy_params=dict(strategy.default_config().params),
         kill_switch_enabled=settings.kill_switch_enabled,
     )
+    # Align risk/gateway with PaperSession when sharing its engine.
+    try:
+        from app.execution.gateway import OrderGateway
+        from app.services.paper_session import get_paper_session
+
+        session = get_paper_session()
+        if paper is session.paper:
+            orch.risk = session.risk_engine
+            orch.gateway = OrderGateway(session.paper, session.risk_engine)
+            orch.kill_switch_enabled = session.kill_switch_enabled
+    except Exception:
+        pass
     _CYCLE_ORCHESTRATORS[key] = orch
     return orch
 
@@ -153,6 +213,22 @@ def reset_cycle_state() -> None:
     _LAST_SIGNAL = None
 
 
+def _fail_closed_persistence(*, reason: str) -> None:
+    """Halt new trading when durable writes or recon cannot be completed."""
+    try:
+        from app.services.paper_session import get_paper_session
+        from app.services.reconciliation import apply_halt_from_storage
+
+        session = get_paper_session()
+        session.trading_paused = True
+        session.risk_engine.state.database_healthy = False
+        session.risk_engine.state.reconciliation_healthy = False
+        apply_halt_from_storage(halted=True)
+        logger.error("paper_cycle_fail_closed", extra={"reason": reason})
+    except Exception:
+        logger.error("paper_cycle_fail_closed_apply_failed", extra={"reason": reason})
+
+
 def last_cycle_result() -> CycleResult | None:
     return _LAST_CYCLE
 
@@ -163,6 +239,40 @@ def last_signal() -> TradeSignal | None:
 
 def strategy_runs(limit: int = 50) -> list[StrategyRun]:
     return list(reversed(_STRATEGY_RUNS[-limit:]))
+
+
+def _empty_result(
+    *,
+    correlation_id: str,
+    symbol: str,
+    timeframe: str,
+    orch: TradingOrchestrator,
+    reason: str,
+    message: str,
+    reject_reason: str | None,
+    candle_open_time: datetime | None = None,
+    accepted: bool = False,
+    idempotent_replay: bool = False,
+    lock_status: str | None = None,
+) -> CycleResult:
+    snap = orch.snapshot() if accepted or idempotent_replay else {}
+    return CycleResult(
+        correlation_id=correlation_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        strategy_name=orch.strategy.name,
+        strategy_version=orch.strategy.version,
+        strategy_run_id="",
+        candle_open_time=candle_open_time,
+        signal_direction=SignalDirection.HOLD.value,
+        signal_reason=reason,
+        accepted=accepted,
+        reject_reason=reject_reason,
+        portfolio=snap,
+        message=message,
+        idempotent_replay=idempotent_replay,
+        lock_status=lock_status,
+    )
 
 
 async def run_paper_trading_cycle(
@@ -176,24 +286,87 @@ async def run_paper_trading_cycle(
     journal: JournalStore | None = None,
     orchestrator: TradingOrchestrator | None = None,
     candle_limit: int = 120,
+    account_id: str = "paper-default",
 ) -> CycleResult:
     """
     Run one end-to-end paper cycle for the latest closed candle.
 
     Idempotent for the same (symbol, strategy version, candle close/open time):
     reprocessing the same closed bar does not create a second trade.
+    Uses DB cycle locks when a database is available.
+    Auto-attaches a JournalStore when ``journal`` is omitted and the shared
+    DB session is available.
     """
     global _LAST_CYCLE, _LAST_SIGNAL
 
     settings = settings or get_settings()
     correlation_id = correlation_id or uuid4().hex
     source: CandleSource = candle_source or OfflineCandleSource()
+
+    # Auto-attach journal for durable order/fill ledger when caller omitted it.
+    # Skip ephemeral in-memory URLs (pytest isolation) — callers pass JournalStore.
+    _owns_journal_session = False
+    _journal_cm: Any = None
+    if journal is None and ":memory:" not in settings.database_url:
+        try:
+            from app.db.base import session_scope
+
+            _journal_cm = session_scope()
+            _journal_session = await _journal_cm.__aenter__()
+            journal = JournalStore(_journal_session)
+            _owns_journal_session = True
+        except Exception:
+            journal = None
+            _journal_cm = None
+
+    try:
+        return await _run_paper_trading_cycle_inner(
+            symbol=symbol,
+            timeframe=timeframe,
+            correlation_id=correlation_id,
+            strategy_id=strategy_id,
+            candle_source=source,
+            settings=settings,
+            journal=journal,
+            orchestrator=orchestrator,
+            candle_limit=candle_limit,
+            account_id=account_id,
+        )
+    finally:
+        if _owns_journal_session and _journal_cm is not None:
+            try:
+                await _journal_cm.__aexit__(None, None, None)
+            except Exception:
+                logger.warning(
+                    "paper_cycle_journal_session_close_failed",
+                    extra={"correlation_id": correlation_id},
+                )
+
+
+async def _run_paper_trading_cycle_inner(
+    *,
+    symbol: str,
+    timeframe: str,
+    correlation_id: str,
+    strategy_id: str,
+    candle_source: CandleSource,
+    settings: Settings,
+    journal: JournalStore | None,
+    orchestrator: TradingOrchestrator | None,
+    candle_limit: int,
+    account_id: str,
+) -> CycleResult:
+    global _LAST_CYCLE, _LAST_SIGNAL
+
+    source = candle_source
     orch = orchestrator or get_or_create_orchestrator(
         symbol=symbol,
         strategy_id=strategy_id,
         settings=settings,
         journal=journal,
     )
+    if journal is not None:
+        orch.journal = journal
 
     logger.info(
         "paper_cycle_start",
@@ -205,21 +378,35 @@ async def run_paper_trading_cycle(
         },
     )
 
+    # Fail closed when reconciliation halt is active.
+    try:
+        from app.services.reconciliation import is_reconciliation_healthy
+
+        if settings.enable_reconciliation and not is_reconciliation_healthy():
+            result = _empty_result(
+                correlation_id=correlation_id,
+                symbol=symbol,
+                timeframe=timeframe,
+                orch=orch,
+                reason="reconciliation halt — new orders blocked",
+                message="Cycle rejected: reconciliation unhealthy",
+                reject_reason="RECONCILIATION_HALT",
+            )
+            _LAST_CYCLE = result
+            return result
+    except Exception:
+        pass
+
     candles = await source.load_closed_candles(symbol, timeframe, limit=candle_limit)
     if not candles:
-        result = CycleResult(
+        result = _empty_result(
             correlation_id=correlation_id,
             symbol=symbol,
             timeframe=timeframe,
-            strategy_name=orch.strategy.name,
-            strategy_version=orch.strategy.version,
-            strategy_run_id="",
-            candle_open_time=None,
-            signal_direction=SignalDirection.HOLD.value,
-            signal_reason="no closed candles available",
-            accepted=False,
-            reject_reason="NO_CANDLES",
+            orch=orch,
+            reason="no closed candles available",
             message="No closed candles to evaluate",
+            reject_reason="NO_CANDLES",
         )
         _LAST_CYCLE = result
         return result
@@ -235,6 +422,141 @@ async def run_paper_trading_cycle(
         ensure_utc(target.open_time),
     )
     if cycle_key in _PROCESSED_CYCLE_KEYS:
+        result = _empty_result(
+            correlation_id=correlation_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            orch=orch,
+            reason="idempotent: candle already processed for this strategy version",
+            message="Cycle skipped — same symbol/strategy/candle already processed",
+            reject_reason=None,
+            candle_open_time=ensure_utc(target.open_time),
+            accepted=True,
+            idempotent_replay=True,
+            lock_status="skipped_idempotent",
+        )
+        _LAST_CYCLE = result
+        return result
+
+    # Acquire DB cycle lock (final uniqueness protection) via shared engine.
+    lock_owner: str | None = None
+    lock_key: str | None = None
+    lock_status = "memory_only"
+    try:
+        from app.db.base import Base, get_shared_engine, session_scope
+        from app.services import cycle_lock as _cycle_lock_models  # noqa: F401
+        from app.services.cycle_lock import (
+            LockStatus,
+            acquire_cycle_lock,
+            make_cycle_lock_key,
+        )
+
+        lock_key = make_cycle_lock_key(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            strategy_version=orch.strategy.version,
+            symbol=symbol,
+            timeframe=timeframe,
+            candle_open_time=target.open_time,
+        )
+        # Ensure lock tables exist (dev/sqlite safety).
+        engine = get_shared_engine()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_scope() as lock_db:
+            acquired = await acquire_cycle_lock(
+                lock_db,
+                lock_key=lock_key,
+                ttl_seconds=settings.cycle_lock_ttl_seconds,
+                correlation_id=correlation_id,
+            )
+            if acquired.status == LockStatus.HELD:
+                result = _empty_result(
+                    correlation_id=correlation_id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    orch=orch,
+                    reason="cycle lock held by another worker",
+                    message="Cycle rejected: lock held (safe fail-closed)",
+                    reject_reason="CYCLE_LOCK_HELD",
+                    candle_open_time=ensure_utc(target.open_time),
+                    lock_status="held",
+                )
+                _LAST_CYCLE = result
+                return result
+            if acquired.status == LockStatus.ACQUIRED and acquired.lock is not None:
+                lock_owner = acquired.lock.owner
+                lock_status = "acquired"
+            else:
+                lock_status = "unavailable"
+    except Exception:
+        lock_status = "unavailable"
+
+    if lock_status == "unavailable" and settings.cycle_lock_fail_closed:
+        result = _empty_result(
+            correlation_id=correlation_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            orch=orch,
+            reason="cycle lock layer unavailable",
+            message="Cycle rejected: lock unavailable (fail-closed)",
+            reject_reason="CYCLE_LOCK_UNAVAILABLE",
+            candle_open_time=ensure_utc(target.open_time),
+            lock_status="unavailable",
+        )
+        _LAST_CYCLE = result
+        return result
+
+    try:
+        # Evaluate on the tip before execution so cycle metadata reflects the
+        # decision that drove the order (not the post-fill flat/long state).
+        primed_window = list(orch._window.get(symbol, []))
+        signal = orch._evaluate(symbol, [*primed_window, target])
+        _LAST_SIGNAL = signal
+
+        outcome: CandleOutcome = await orch.process_candle(target)
+        _PROCESSED_CYCLE_KEYS.add(cycle_key)
+        run = StrategyRun(
+            id=uuid4().hex,
+            strategy_name=orch.strategy.name,
+            strategy_version=orch.strategy.version,
+            symbol=symbol,
+            timeframe=timeframe,
+            candle_open_time=ensure_utc(target.open_time),
+            correlation_id=correlation_id,
+            direction=signal.direction,
+            metadata={
+                "outcome": {
+                    "accepted": outcome.accepted,
+                    "reject_reason": outcome.reject_reason,
+                    "order_id": outcome.order_id,
+                    "order_status": outcome.order_status,
+                    "risk_decision": outcome.risk_decision,
+                    "risk_reason_code": outcome.risk_reason_code,
+                },
+                "indicators": signal.metadata.get("indicators", {}),
+            },
+        )
+        _STRATEGY_RUNS.append(run)
+        if journal is not None:
+            try:
+                await journal.record_system_event(
+                    "STRATEGY_RUN",
+                    f"{run.strategy_name} {run.direction.value} on {symbol}",
+                    severity="info",
+                    payload={
+                        "strategy_run_id": run.id,
+                        "correlation_id": correlation_id,
+                        "candle_open_time": run.candle_open_time.isoformat(),
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "journal_strategy_run_failed",
+                    extra={"correlation_id": correlation_id},
+                )
+
         snap = orch.snapshot()
         result = CycleResult(
             correlation_id=correlation_id,
@@ -242,98 +564,185 @@ async def run_paper_trading_cycle(
             timeframe=timeframe,
             strategy_name=orch.strategy.name,
             strategy_version=orch.strategy.version,
-            strategy_run_id="",
+            strategy_run_id=run.id,
             candle_open_time=ensure_utc(target.open_time),
-            signal_direction=SignalDirection.HOLD.value,
-            signal_reason="idempotent: candle already processed for this strategy version",
-            accepted=True,
-            idempotent_replay=True,
+            signal_direction=outcome.signal_direction or signal.direction.value,
+            signal_reason=signal.entry_rationale,
+            accepted=outcome.accepted,
+            reject_reason=outcome.reject_reason,
+            order_id=outcome.order_id,
+            order_status=outcome.order_status,
+            risk_decision=outcome.risk_decision,
+            risk_reason_code=outcome.risk_reason_code,
             portfolio=snap,
-            message="Cycle skipped — same symbol/strategy/candle already processed",
+            indicators=dict(signal.metadata.get("indicators", {})),
+            message="paper cycle complete",
+            lock_status=lock_status,
         )
         _LAST_CYCLE = result
-        return result
-
-    # Evaluate on the tip before execution so cycle metadata reflects the
-    # decision that drove the order (not the post-fill flat/long state).
-    primed_window = list(orch._window.get(symbol, []))
-    signal = orch._evaluate(symbol, [*primed_window, target])
-    _LAST_SIGNAL = signal
-
-    outcome: CandleOutcome = await orch.process_candle(target)
-    _PROCESSED_CYCLE_KEYS.add(cycle_key)
-    run = StrategyRun(
-        id=uuid4().hex,
-        strategy_name=orch.strategy.name,
-        strategy_version=orch.strategy.version,
-        symbol=symbol,
-        timeframe=timeframe,
-        candle_open_time=ensure_utc(target.open_time),
-        correlation_id=correlation_id,
-        direction=signal.direction,
-        metadata={
-            "outcome": {
-                "accepted": outcome.accepted,
-                "reject_reason": outcome.reject_reason,
-                "order_id": outcome.order_id,
-                "order_status": outcome.order_status,
-                "risk_decision": outcome.risk_decision,
-                "risk_reason_code": outcome.risk_reason_code,
+        logger.info(
+            "paper_cycle_complete",
+            extra={
+                "correlation_id": correlation_id,
+                "direction": result.signal_direction,
+                "order_id": result.order_id,
+                "risk_decision": result.risk_decision,
+                "lock_status": lock_status,
             },
-            "indicators": signal.metadata.get("indicators", {}),
-        },
-    )
-    _STRATEGY_RUNS.append(run)
-    if journal is not None:
+        )
+        # Accounting invariants — fail closed on critical violations.
         try:
-            await journal.record_system_event(
-                "STRATEGY_RUN",
-                f"{run.strategy_name} {run.direction.value} on {symbol}",
-                severity="info",
-                payload={
-                    "strategy_run_id": run.id,
+            from app.accounting.invariants import check_cycle_invariants
+            from app.services.paper_session import get_paper_session
+
+            session_paper = get_paper_session()
+            ledger = (
+                session_paper.paper if orch.paper is session_paper.paper else orch.paper
+            )
+            inv = check_cycle_invariants(
+                cash=ledger.state.cash,
+                reserved_cash=ledger.state.reserved_cash,
+                positions=dict(ledger.state.positions),
+                realized_pnl=ledger.state.realized_pnl,
+                fills=list(ledger.state.fills),
+                orders=dict(ledger.state.orders),
+            )
+            if not inv.ok:
+                logger.error(
+                    "paper_cycle_invariant_failed",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "violations": inv.to_dict()["violations"],
+                    },
+                )
+                _fail_closed_persistence(
+                    reason="accounting invariant failure after cycle"
+                )
+        except Exception as exc:
+            logger.error(
+                "paper_cycle_invariant_check_error",
+                extra={
                     "correlation_id": correlation_id,
-                    "candle_open_time": run.candle_open_time.isoformat(),
+                    "error": type(exc).__name__,
                 },
             )
-        except Exception:
-            logger.warning(
-                "journal_strategy_run_failed",
-                extra={"correlation_id": correlation_id},
+            _fail_closed_persistence(
+                reason=f"invariant check error: {type(exc).__name__}"
+            )
+        # Durable persistence — fail closed on write failure so memory and DB
+        # cannot silently diverge while trading continues.
+        # Skip ephemeral in-memory databases (pytest isolation).
+        if ":memory:" in settings.database_url:
+            return result
+        try:
+            from app.db.base import session_scope
+            from app.services import paper_persistence as store
+            from app.services.paper_session import (
+                get_paper_session,
+                persist_paper_session,
             )
 
-    snap = orch.snapshot()
-    result = CycleResult(
-        correlation_id=correlation_id,
-        symbol=symbol,
-        timeframe=timeframe,
-        strategy_name=orch.strategy.name,
-        strategy_version=orch.strategy.version,
-        strategy_run_id=run.id,
-        candle_open_time=ensure_utc(target.open_time),
-        signal_direction=outcome.signal_direction or signal.direction.value,
-        signal_reason=signal.entry_rationale,
-        accepted=outcome.accepted,
-        reject_reason=outcome.reject_reason,
-        order_id=outcome.order_id,
-        order_status=outcome.order_status,
-        risk_decision=outcome.risk_decision,
-        risk_reason_code=outcome.risk_reason_code,
-        portfolio=snap,
-        indicators=dict(signal.metadata.get("indicators", {})),
-        message="paper cycle complete",
-    )
-    _LAST_CYCLE = result
-    logger.info(
-        "paper_cycle_complete",
-        extra={
-            "correlation_id": correlation_id,
-            "direction": result.signal_direction,
-            "order_id": result.order_id,
-            "risk_decision": result.risk_decision,
-        },
-    )
-    return result
+            async with session_scope() as session:
+                await persist_cycle_keys(session)
+                try:
+                    await store.save_strategy_run(
+                        session,
+                        run_id=run.id,
+                        strategy_name=run.strategy_name,
+                        strategy_version=run.strategy_version,
+                        symbol=run.symbol,
+                        timeframe=run.timeframe,
+                        candle_open_time=run.candle_open_time,
+                        correlation_id=run.correlation_id,
+                        direction=(
+                            run.direction.value
+                            if hasattr(run.direction, "value")
+                            else str(run.direction)
+                        ),
+                        payload=dict(run.metadata or {}),
+                    )
+                except Exception:
+                    logger.warning(
+                        "strategy_run_persist_failed",
+                        extra={"correlation_id": correlation_id},
+                    )
+                session_paper = get_paper_session()
+                if orch.paper is session_paper.paper:
+                    await persist_paper_session(session, correlation_id=correlation_id)
+                else:
+                    equity = orch.paper.state.cash + sum(
+                        p.quantity * p.current_price
+                        for p in orch.paper.state.positions.values()
+                    )
+                    await store.save_paper_checkpoint(
+                        session,
+                        cash=orch.paper.state.cash,
+                        positions=dict(orch.paper.state.positions),
+                        realized_pnl=orch.paper.state.realized_pnl,
+                        peak_equity=max(equity, orch.paper.state.cash),
+                        consecutive_losses=0,
+                        idempotency_index=dict(orch.paper.state.idempotency_index),
+                        correlation_id=correlation_id,
+                        fills=list(orch.paper.state.fills),
+                    )
+                await store.append_audit_event(
+                    session,
+                    event_type="PAPER_CYCLE",
+                    message=(
+                        f"{result.signal_direction} {result.order_status or ''}".strip()
+                    ),
+                    correlation_id=correlation_id,
+                    order_id=result.order_id,
+                    payload={
+                        "signal_direction": result.signal_direction,
+                        "order_status": result.order_status,
+                        "risk_decision": result.risk_decision,
+                        "risk_reason_code": result.risk_reason_code,
+                        "idempotent_replay": result.idempotent_replay,
+                        "lock_status": lock_status,
+                    },
+                )
+        except Exception as exc:
+            logger.error(
+                "paper_cycle_persist_failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error": type(exc).__name__,
+                },
+            )
+            _fail_closed_persistence(
+                reason=f"cycle persistence failed: {type(exc).__name__}"
+            )
+
+        # Post-cycle reconciliation (fail-closed on mismatch / exception).
+        try:
+            from app.services.reconciliation import run_paper_reconciliation
+
+            await run_paper_reconciliation(persist=True)
+        except Exception as exc:
+            logger.error(
+                "paper_cycle_reconciliation_failed",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error": type(exc).__name__,
+                },
+            )
+            _fail_closed_persistence(
+                reason=f"post-cycle reconciliation failed: {type(exc).__name__}"
+            )
+        return result
+    finally:
+        if lock_owner and lock_key:
+            try:
+                from app.db.base import session_scope
+                from app.services.cycle_lock import release_cycle_lock
+
+                async with session_scope() as lock_db:
+                    await release_cycle_lock(
+                        lock_db, lock_key=lock_key, owner=lock_owner
+                    )
+            except Exception:
+                pass
 
 
 # Ensure default strategy is registered when this module loads.

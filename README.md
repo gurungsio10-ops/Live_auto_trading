@@ -2,100 +2,110 @@
 
 Safe, deterministic, personal cryptocurrency **paper** trading platform.
 
-**Paper mode is the default.** Live money trading is not implemented. AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py`).
+**Paper trading is supported. Live money remains disabled.**  
+AI is advisory only. Every order passes through one central risk engine (`app/risk/engine.py` via `OrderGateway`).
 
-## Architecture summary
+Banner: **PAPER TRADING — NO REAL FUNDS**
+
+## Authoritative release branch
+
+**`release/atlas-paper-v1`** (PR **#34**) consolidates the verified paper lineage (#21–#28) plus PR **#35** performance analytics. Target tag: **`v1.0.0-paper`**.
+
+| Doc | Purpose |
+|-----|---------|
+| `docs/release/PAPER_V1_PR_AUDIT.md` | Evidence-based open PR decisions (SHA / merge-base) |
+| `docs/release/PAPER_V1_ACCEPTANCE_REPORT.md` | Deterministic acceptance evidence |
+| `docs/PR_CONSOLIDATION_AUDIT.md` | Earlier consolidation map |
+| `docs/RELEASE_READINESS_REPORT.md` | Completion % / blockers |
+| `docs/MOBILE_UI_AUDIT.md` | Viewport evidence 320–1440 + mobile IA |
+| `docs/operations/DEPLOYMENT_RUNBOOK.md` | Paper deploy bring-up |
+| `docs/operations/BACKUP_RESTORE.md` | Backup / restore |
+| `docs/operations/INCIDENT_RESPONSE.md` | Kill switch / secrets / recon incidents |
+
+## What works today
+
+- Deterministic paper cycles (offline fixtures by default; public Bybit MD optional)
+- Strategies: **EMA crossover**, **EMA + RSI**, **RSI mean reversion**, **Donchian breakout**
+- Durable paper account / risk / strategy persistence (Alembic through **`0007_perf_analytics`**)
+- Persistent closed-trade journal + performance metrics / reports / CSV+JSON export
+- Restart-safe hydration + fail-closed reconciliation
+- Continuous scheduler with explicit start/stop; kill switch; cycle locks; idempotency
+- Next-bar SL/TP evaluation on the paper path; backtests; journal / audit trail
+- Admin authentication for mutating operations; fail-closed Next.js BFF proxies
+- Health, readiness, metrics; webhook alert hooks; Docker Compose + Codespaces helpers
+- Mobile-first ops UI: Home / Trade / Positions / Activity / More (+ `/performance`, `/trades`, `/reports`)
+
+## Architecture
 
 ```text
-Market data → candle validation → EMA strategy → signal → risk engine
-  → paper broker → fill → portfolio (WAC) → journal → /api/v1 → dashboard
+Market data → candle validation → strategy → signal → OrderGateway → RiskEngine
+  → paper engine → PaperSession + journal + dual-write persistence
+  → analytics (closed trades / performance) → /api + dashboard
 ```
 
-Key packages: `app/market_data`, `app/strategies`, `app/risk`, `app/execution`, `app/services` (orchestrator + paper cycle), `app/journal`, `app/api`, `frontend/`.
+Historical audits under `docs/audits/` and `docs/audit/` remain reference material; prefer the release docs above for merge decisions.
 
-Docs:
+## Migrations
 
-- `docs/architecture/current_state_audit.md`
-- `docs/architecture/paper_trading_flow.md`
-- `docs/architecture/risk_controls.md`
-- `docs/architecture/database_schema.md`
-- `docs/operations/runbook.md`
-- `docs/operations/live_trading_readiness_checklist.md` (**all items unchecked**)
+| Revision | Contents |
+|----------|----------|
+| `0001_phase2` | symbols, candles |
+| `0002_phase9` | journal tables |
+| `0003_users` | users |
+| `0004_paper_slice` | balances, positions, snapshots, system_state, … |
+| `0005_cycle_ops` | cycle_locks, scheduler_runs, reconciliation_reports |
+| `0006_paper_durable` | paper_accounts, risk_state, strategy_state, processed_cycle_keys, equity_snapshots, kill_switch_events |
+| `0007_perf_analytics` | closed_trades, performance_reports |
 
-## Local setup
+```bash
+alembic upgrade head
+```
+
+## Persistence model
+
+`PaperSession` is process-local for latency but **hydrated from DB on startup** and dual-written after cycles / control-plane mutations. Startup reconciliation is fail-closed: untrusted durable state pauses trading. See `docs/operations/recovery_runbook.md`.
+
+## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# Keep TRADING_MODE=paper. Set ADMIN_API_TOKEN for kill-switch / paper reset.
+# Keep TRADING_MODE=paper, ENABLE_LIVE_TRADING=false
 alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Dashboard:
+### PostgreSQL (recommended durable path)
 
 ```bash
-cd frontend && npm install
+docker compose up -d          # Postgres + Redis
+# set DATABASE_URL=postgresql+asyncpg://atlas:atlas@127.0.0.1:5432/atlas in .env
+alembic upgrade head
+```
+
+### Dashboard
+
+```bash
+cd frontend && npm ci
 ADMIN_API_TOKEN=local-dev-admin-token ATLAS_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-## Docker setup
+Open http://localhost:3000 — login `admin` / `atlas` (dev defaults).  
+Mobile: bottom nav Home / Trade / Positions / Activity / More. Recovery: `/recovery`.
 
-```bash
-docker compose up -d   # PostgreSQL + Redis
-```
+## Safety invariants (non-negotiable)
 
-Point `DATABASE_URL` at the compose Postgres instance (asyncpg URL). App processes still run on the host (or your own image) for development.
+- Default mode remains **PAPER**; `ENABLE_LIVE_TRADING=false`
+- `LiveTradingGate` fails closed — live order submission is impossible in this release
+- Futures, margin, leverage, withdrawals remain disabled
+- AI is advisory only and cannot bypass the risk engine
+- Never expose API keys, exchange secrets, or admin tokens to the browser
+- Never invent portfolio / order / trade data when the backend is unavailable
+- Decimal for money; timezone-aware UTC timestamps
+- Testnet and paper states must stay labelled and isolated
 
-## Environment variables
-
-See `.env.example`. Critical:
-
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `TRADING_MODE` | `paper` | Must stay paper for this milestone |
-| `KILL_SWITCH_ENABLED` | `false` | Global halt for new orders |
-| `ADMIN_API_TOKEN` | (unset) | Required for mutating `/api/v1` system routes |
-| `PAPER_STARTING_BALANCE` | `10000` | Quote currency (USDT) |
-| `PAPER_FEE_BPS` / `PAPER_SLIPPAGE_BPS` | `10` / `5` | Simulated costs |
-| `ALLOWED_SYMBOLS` | `BTC/USDT` | Risk allowlist |
-| Risk `*_PERCENT` | see example | Accepts `1` or `0.01` for 1% |
-
-Never commit real secrets.
-
-## Database migrations
-
-```bash
-alembic upgrade head   # 0001..0004
-```
-
-## Running backend / frontend
-
-```bash
-uvicorn app.main:app --reload
-npm --prefix frontend run dev
-```
-
-Health: `GET /health`, `GET /api/v1/health`, `GET /api/v1/system/status`.
-
-## Run one paper cycle
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/paper/cycle/run \
-  -H 'Content-Type: application/json' \
-  -d '{"symbol":"BTC/USDT","timeframe":"1m","strategy_id":"ema_crossover"}'
-```
-
-Or use **Run one paper cycle** on the overview dashboard (simulated results only).
-
-CLI offline replay:
-
-```bash
-python -m app.cli paper-run --offline --duration-minutes 0
-```
-
-## Tests / quality
+## Verify
 
 ```bash
 pytest -q
@@ -106,43 +116,12 @@ alembic upgrade head
 npm --prefix frontend run lint
 npm --prefix frontend run typecheck
 npm --prefix frontend run build
+docker compose config
+node frontend/scripts/check-mobile-nav.mjs
 ```
 
-CI: `.github/workflows/ci.yml`.
+Coverage gate remains **≥85%** (`pyproject.toml`).
 
-## Safety model
+## Attribution
 
-- Decimal-only money; timezone-aware UTC timestamps
-- No secrets in logs (`app/core/security.redact`)
-- Kill switch blocks new orders; reads remain available
-- Paper reset requires `confirm=RESET_PAPER_ACCOUNT` + admin token
-- Live execution raises `LiveTradingDisabledError`
-
-## Paper versus live
-
-| Mode | Status |
-|------|--------|
-| Paper | Supported end-to-end for BTC/USDT |
-| Live | Disabled — see live readiness checklist (unchecked) |
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| Binance HTTP 451 | Geo-block; use `--offline` or another public exchange |
-| `no such table` | `alembic upgrade head` |
-| Demo banner in UI | Start backend; set `ATLAS_BACKEND_URL` |
-| 503 on kill-switch/reset | Set `ADMIN_API_TOKEN` on API (and Next server for reset proxy) |
-| Startup fails with live mode | Expected — keep `TRADING_MODE=paper` |
-
-## Current limitations
-
-- In-memory paper session resets on process restart (journal tables exist for durable audit when wired with a DB session)
-- Public Binance may be unreachable from some networks
-- Backtests share strategy rules but do not always share the live risk gateway path
-- Live order execution is intentionally unimplemented
-- Simulated / backtest results **do not guarantee future performance**
-
-## Warnings
-
-This is **not** ready for live money. Passing tests validate paper trading only.
+Project Atlas — Developed by Saugat Gurung

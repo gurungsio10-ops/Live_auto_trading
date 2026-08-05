@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.errors import ConfigurationError, LiveTradingDisabledError
+from app.core.runtime_mode import RuntimeMode, derive_runtime_mode
 
 TradingMode = Literal["paper", "live"]
-ExchangeEnv = Literal["paper", "testnet", "live"]
+ExchangeEnv = Literal["paper", "testnet", "live", "backtest"]
 
 
 def _bps_to_rate(bps: Decimal) -> Decimal:
@@ -36,17 +38,35 @@ class Settings(BaseSettings):
 
     # Safety-critical defaults — do not weaken.
     trading_mode: TradingMode = Field(default="paper", validation_alias="TRADING_MODE")
-    live_trading_enabled: bool = False
+    # ENABLE_LIVE_TRADING preferred; LIVE_TRADING_ENABLED accepted for compat.
+    live_trading_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_LIVE_TRADING", "LIVE_TRADING_ENABLED"),
+    )
+    # Paper automation gate (false = cycles require explicit one-shot confirm).
+    trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
     kill_switch_enabled: bool = False
-    exchange_env: ExchangeEnv = "paper"
+    exchange_env: ExchangeEnv = Field(
+        default="paper",
+        validation_alias=AliasChoices("EXCHANGE_ENV", "EXCHANGE_TESTNET"),
+    )
     live_approval_token: SecretStr | None = None
+    # Explicit acknowledgement required before any LIVE start attempt.
+    live_startup_ack: str = Field(default="", validation_alias="LIVE_STARTUP_ACK")
+    # Optional unified mode: BACKTEST | PAPER | TESTNET | LIVE
+    atlas_runtime_mode: str | None = Field(
+        default=None, validation_alias="ATLAS_RUNTIME_MODE"
+    )
 
     # Local admin token for mutating system endpoints (kill switch, paper reset).
     admin_api_token: SecretStr | None = Field(
         default=None, validation_alias="ADMIN_API_TOKEN"
     )
 
-    exchange_id: str = "binance"
+    exchange_id: str = Field(
+        default="bybit",
+        validation_alias=AliasChoices("EXCHANGE_ID", "EXCHANGE_NAME"),
+    )
     exchange_api_key: SecretStr | None = None
     exchange_api_secret: SecretStr | None = None
 
@@ -60,11 +80,51 @@ class Settings(BaseSettings):
     market_data_stale_seconds: int = Field(
         default=30, ge=1, validation_alias="MARKET_DATA_STALE_SECONDS"
     )
+    order_cooldown_seconds: int = Field(
+        default=0, ge=0, validation_alias="ORDER_COOLDOWN_SECONDS"
+    )
     webhook_alert_url: str | None = None
+
+    # Production paper/testnet runtime controls (live money remains hard-blocked).
+    use_live_market_data: bool = Field(
+        default=False, validation_alias="USE_LIVE_MARKET_DATA"
+    )
+    enable_trading_scheduler: bool = Field(
+        default=False, validation_alias="ENABLE_TRADING_SCHEDULER"
+    )
+    paper_cycle_interval_seconds: int = Field(
+        default=60, ge=5, validation_alias="PAPER_CYCLE_INTERVAL_SECONDS"
+    )
+    enable_reconciliation: bool = Field(
+        default=True, validation_alias="ENABLE_RECONCILIATION"
+    )
+    reconciliation_interval_seconds: int = Field(
+        default=120, ge=30, validation_alias="RECONCILIATION_INTERVAL_SECONDS"
+    )
+    scheduler_failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="SCHEDULER_FAILURE_THRESHOLD",
+    )
+    cycle_lock_ttl_seconds: int = Field(
+        default=120,
+        ge=10,
+        validation_alias="CYCLE_LOCK_TTL_SECONDS",
+    )
+    cycle_lock_fail_closed: bool = Field(
+        default=True,
+        validation_alias="CYCLE_LOCK_FAIL_CLOSED",
+    )
+    cors_allowed_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        validation_alias="CORS_ALLOWED_ORIGINS",
+    )
+    enable_ops_sse: bool = Field(default=True, validation_alias="ENABLE_OPS_SSE")
 
     # Paper execution (env-driven; Decimal only)
     paper_starting_balance: Decimal = Field(
-        default=Decimal("10000"), validation_alias="PAPER_STARTING_BALANCE"
+        default=Decimal("10000"),
+        validation_alias=AliasChoices("PAPER_STARTING_BALANCE", "STARTING_BALANCE"),
     )
     paper_fee_bps: Decimal = Field(
         default=Decimal("10"), validation_alias="PAPER_FEE_BPS"
@@ -75,10 +135,16 @@ class Settings(BaseSettings):
 
     # Risk defaults (fractions: 0.01 = 1%). Percent env aliases accepted.
     max_risk_per_trade: Decimal = Field(
-        default=Decimal("0.01"), validation_alias="RISK_PER_TRADE_PERCENT"
+        default=Decimal("0.01"),
+        validation_alias=AliasChoices(
+            "RISK_PER_TRADE_PERCENT", "MAX_POSITION_RISK_PERCENT"
+        ),
     )
     max_position_exposure: Decimal = Field(
-        default=Decimal("0.25"), validation_alias="MAX_POSITION_PERCENT"
+        default=Decimal("0.20"),
+        validation_alias=AliasChoices(
+            "MAX_POSITION_PERCENT", "MAX_POSITION_SIZE_PERCENT"
+        ),
     )
     max_portfolio_exposure: Decimal = Decimal("0.80")
     max_open_positions: int = Field(default=3, validation_alias="MAX_OPEN_POSITIONS")
@@ -93,18 +159,59 @@ class Settings(BaseSettings):
     min_order_notional: Decimal = Decimal("10")
     default_leverage: Decimal = Decimal("1")
 
-    supported_symbols: tuple[str, ...] = Field(
-        default=("BTC/USDT",), validation_alias="ALLOWED_SYMBOLS"
+    # NoDecode: pydantic-settings otherwise JSON-decodes tuple fields and rejects
+    # plain env values like ALLOWED_SYMBOLS=BTC/USDT (common Codespaces/.env.example).
+    supported_symbols: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=("BTC/USDT",),
+        validation_alias="ALLOWED_SYMBOLS",
     )
     supported_timeframes: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
+    default_symbol: str = Field(default="BTC/USDT", validation_alias="DEFAULT_SYMBOL")
+    default_timeframe: str = Field(default="5m", validation_alias="DEFAULT_TIMEFRAME")
 
-    @field_validator("trading_mode")
+    # Baseline EMA+RSI strategy env knobs
+    fast_ema_period: int = Field(default=9, ge=1, validation_alias="FAST_EMA_PERIOD")
+    slow_ema_period: int = Field(default=21, ge=2, validation_alias="SLOW_EMA_PERIOD")
+    rsi_period: int = Field(default=14, ge=2, validation_alias="RSI_PERIOD")
+    stop_loss_percent: Decimal = Field(
+        default=Decimal("1"), validation_alias="STOP_LOSS_PERCENT"
+    )
+    take_profit_percent: Decimal = Field(
+        default=Decimal("2"), validation_alias="TAKE_PROFIT_PERCENT"
+    )
+
+    @field_validator("trading_mode", mode="before")
     @classmethod
-    def _normalize_trading_mode(cls, value: str) -> str:
-        normalized = value.lower().strip()
+    def _normalize_trading_mode(cls, value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "paper"
+        normalized = str(value).lower().strip()
+        # Never fall through to live on typos — invalid → paper.
         if normalized not in {"paper", "live"}:
-            raise ValueError("TRADING_MODE must be 'paper' or 'live'")
+            return "paper"
         return normalized
+
+    @field_validator("exchange_env", mode="before")
+    @classmethod
+    def _normalize_exchange_env(cls, value: object) -> str:
+        if value is None or str(value).strip() == "":
+            return "paper"
+        raw = str(value).lower().strip()
+        # EXCHANGE_TESTNET=true|false alias
+        if raw in {"true", "1", "yes"}:
+            return "testnet"
+        if raw in {"false", "0", "no"}:
+            return "paper"
+        if raw not in {"paper", "testnet", "live", "backtest"}:
+            return "paper"
+        return raw
+
+    @field_validator("atlas_runtime_mode", mode="before")
+    @classmethod
+    def _normalize_runtime_mode_field(cls, value: object) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        return str(value).strip().upper()
 
     @field_validator(
         "paper_starting_balance",
@@ -116,6 +223,8 @@ class Settings(BaseSettings):
         "max_drawdown",
         "min_order_notional",
         "default_leverage",
+        "stop_loss_percent",
+        "take_profit_percent",
         mode="before",
     )
     @classmethod
@@ -133,9 +242,22 @@ class Settings(BaseSettings):
     @field_validator("supported_symbols", mode="before")
     @classmethod
     def _parse_symbols(cls, value: object) -> object:
+        if value is None or value == "":
+            return ("BTC/USDT",)
         if isinstance(value, str):
-            parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
-            return tuple(parts)
+            raw = value.strip()
+            # Accept JSON list form as well as comma-separated symbols.
+            if raw.startswith("["):
+                try:
+                    decoded = json.loads(raw)
+                except json.JSONDecodeError:
+                    decoded = None
+                if isinstance(decoded, list):
+                    return tuple(str(p).strip() for p in decoded if str(p).strip())
+            parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+            return tuple(parts) or ("BTC/USDT",)
+        if isinstance(value, (list, tuple)):
+            return tuple(str(p).strip() for p in value if str(p).strip())
         return value
 
     @field_validator(
@@ -147,12 +269,15 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _normalize_percent_or_fraction(cls, value: Decimal) -> Decimal:
-        """Accept either fraction (0.01) or whole percent (1 → 0.01, 25 → 0.25)."""
+        """Accept fraction (0.01) or whole percent points (1 → 0.01, 20 → 0.20).
+
+        Bare ``1`` is treated as 1% (not 100%) to match MVP env examples.
+        """
         if value < 0:
             raise ValueError("risk percentages must be non-negative")
-        if value > 1:
-            if value > 100:
-                raise ValueError("risk percentage out of range")
+        if value > 100:
+            raise ValueError("risk percentage out of range")
+        if value >= 1:
             return value / Decimal("100")
         return value
 
@@ -166,37 +291,52 @@ class Settings(BaseSettings):
             raise ConfigurationError(
                 "default_leverage must be 1 — leverage is not supported"
             )
+        if self.fast_ema_period >= self.slow_ema_period:
+            raise ConfigurationError("FAST_EMA_PERIOD must be < SLOW_EMA_PERIOD")
+        if self.stop_loss_percent <= 0 or self.take_profit_percent <= 0:
+            raise ConfigurationError(
+                "STOP_LOSS_PERCENT and TAKE_PROFIT_PERCENT must be > 0"
+            )
+        # Keep allowlist in sync with default symbol.
+        if self.default_symbol and self.default_symbol not in self.supported_symbols:
+            self.supported_symbols = tuple(
+                dict.fromkeys([*self.supported_symbols, self.default_symbol])
+            )
+        if self.default_timeframe not in self.supported_timeframes:
+            raise ConfigurationError(
+                f"DEFAULT_TIMEFRAME={self.default_timeframe!r} not in supported timeframes"
+            )
         return self
 
     def assert_startup_safe(self) -> None:
         """
         Fail closed at application startup.
 
-        Live mode without every explicit gate → ConfigurationError.
-        Live mode with gates → LiveTradingDisabledError (not implemented yet).
+        LIVE remains hard-blocked in this development phase even when
+        ENABLE_LIVE_TRADING, credentials, and LIVE_STARTUP_ACK are set.
         """
-        if self.trading_mode != "live":
-            return
-        token = (
-            self.live_approval_token.get_secret_value()
-            if self.live_approval_token
-            else ""
-        )
-        gates_ok = (
-            self.live_trading_enabled
-            and self.exchange_env in {"testnet", "live"}
-            and self.has_exchange_credentials
-            and bool(token.strip())
-            and not self.kill_switch_enabled
-        )
-        if not gates_ok:
-            raise ConfigurationError(
-                "TRADING_MODE=live rejected: incomplete live-trading gates "
-                "(require LIVE_TRADING_ENABLED, credentials, LIVE_APPROVAL_TOKEN, "
-                "exchange_env testnet|live, and kill switch off)."
+        from app.core.safety import SafetyGuard
+
+        SafetyGuard(self).assert_paper_only()
+        mode = self.runtime_mode
+        if mode == RuntimeMode.LIVE or self.exchange_env == "live":
+            raise LiveTradingDisabledError(
+                "LIVE execution is hard-disabled in this development phase. "
+                "Keep ATLAS_RUNTIME_MODE=PAPER (or TESTNET) and "
+                "ENABLE_LIVE_TRADING=false."
             )
-        raise LiveTradingDisabledError(
-            "Live trading mode is not implemented. Keep TRADING_MODE=paper."
+        if self.trading_mode == "live":
+            raise LiveTradingDisabledError(
+                "TRADING_MODE=live is disabled. Keep TRADING_MODE=paper."
+            )
+
+    @property
+    def runtime_mode(self) -> RuntimeMode:
+        """Effective mode: BACKTEST | PAPER | TESTNET | LIVE."""
+        return derive_runtime_mode(
+            explicit=self.atlas_runtime_mode,
+            trading_mode=self.trading_mode,
+            exchange_env=self.exchange_env,
         )
 
     @property

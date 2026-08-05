@@ -2,7 +2,8 @@
 
 **Status: NOT READY — all items remain unchecked.**
 
-Do not enable live money trading until every item below is explicitly completed, reviewed, and approved. This milestone implements **paper trading only**.
+Paper V1 consolidation (`cursor/release-paper-v1-consolidated-e3a2`) does **not** enable live money.
+Do not enable live money trading until every item below is explicitly completed, reviewed, and approved.
 
 ## Gates (all required)
 

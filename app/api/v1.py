@@ -87,13 +87,30 @@ async def system_status() -> SystemHealth:
     settings = get_settings()
     session = get_paper_session()
     kill = session.kill_switch_enabled or settings.kill_switch_enabled
+    db_ok = True
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.db.base import create_engine
+
+        engine = create_engine()
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as db:
+            await db.execute(text("SELECT 1"))
+        await engine.dispose()
+    except Exception:
+        db_ok = False
     return SystemHealth(
         status="halted" if kill else "ok",
         trading_mode=settings.trading_mode,
+        runtime_mode=settings.runtime_mode.value,
         kill_switch_enabled=kill,
         live_trading_enabled=settings.live_trading_enabled,
         exchange_env=settings.exchange_env,
-        database_ok=True,
+        database_ok=db_ok,
         market_data_ok=True,
         risk_engine_ok=True,
         detail="paper trading vertical slice",
@@ -220,6 +237,130 @@ async def portfolio_history(pagination: PaginationDep) -> dict[str, Any]:
     return _page(get_paper_session().equity_points(), pagination)
 
 
+@router.get(
+    "/recovery/status",
+    summary="Durable recovery / reconciliation status",
+    description=(
+        "Backend source of truth for restart recovery: recon halt, kill switch, "
+        "risk health flags, and last reconciliation result. Frontend must not "
+        "recompute balances or P&L."
+    ),
+)
+async def recovery_status() -> dict[str, Any]:
+    from app.core.config import get_settings
+    from app.services import paper_cycle
+    from app.services.reconciliation import reconciliation_status
+    from app.services.trading_scheduler import scheduler_status
+
+    settings = get_settings()
+    session = get_paper_session()
+    rs = session.risk_engine.state
+    recon = reconciliation_status()
+    from decimal import Decimal
+
+    last = paper_cycle.last_cycle_result()
+    equity = session.paper.state.cash + sum(
+        (p.quantity * p.current_price for p in session.paper.state.positions.values()),
+        Decimal("0"),
+    )
+    try:
+        sched = scheduler_status()
+    except Exception:
+        sched = {"running": False, "detail": "unavailable"}
+    return {
+        "recovery": {
+            "runtime_mode": settings.runtime_mode.value
+            if hasattr(settings.runtime_mode, "value")
+            else str(settings.runtime_mode),
+            "trading_mode": settings.trading_mode,
+            "reconciliation": recon,
+            "kill_switch_enabled": session.kill_switch_enabled,
+            "trading_enabled": session.trading_enabled,
+            "trading_paused": session.trading_paused,
+            "last_hydrated_at": session.last_hydrated_at,
+            "persistence_status": ("healthy" if rs.database_healthy else "degraded"),
+            "database_status": "ok" if rs.database_healthy else "unhealthy",
+            "scheduler": sched,
+            "market_data_stale": not rs.market_data_healthy,
+            "last_cycle": None
+            if last is None
+            else {
+                "correlation_id": last.correlation_id,
+                "accepted": last.accepted,
+                "signal_direction": last.signal_direction,
+                "order_status": last.order_status,
+                "reject_reason": last.reject_reason,
+                "idempotent_replay": last.idempotent_replay,
+                "message": last.message,
+            },
+            "risk": {
+                "reconciliation_healthy": rs.reconciliation_healthy,
+                "risk_engine_healthy": rs.risk_engine_healthy,
+                "database_healthy": rs.database_healthy,
+                "market_data_healthy": rs.market_data_healthy,
+                "circuit_breaker_open": rs.circuit_breaker_open,
+                "circuit_breaker_reason": rs.circuit_breaker_reason,
+                "seen_idempotency_keys": len(rs.seen_idempotency_keys),
+            },
+            "portfolio": {
+                "cash": str(session.paper.state.cash),
+                "equity": str(equity),
+                "realized_pnl": str(session.paper.state.realized_pnl),
+                "peak_equity": str(session._peak_equity),
+                "daily_start_equity": str(session._daily_start_equity),
+                "open_positions": len(session.paper.state.positions),
+                "open_orders": sum(
+                    1
+                    for o in session.paper.state.orders.values()
+                    if o.status.value
+                    in {
+                        "SUBMITTED",
+                        "PARTIALLY_FILLED",
+                        "APPROVED",
+                        "RISK_PENDING",
+                    }
+                ),
+                "fills": len(session.paper.state.fills),
+                "positions": [
+                    {
+                        "symbol": p.symbol,
+                        "quantity": str(p.quantity),
+                        "entry_price": str(p.entry_price),
+                        "current_price": str(p.current_price),
+                        "unrealized_pnl": str(p.unrealized_pnl),
+                    }
+                    for p in session.paper.state.positions.values()
+                ],
+            },
+            "strategy": {
+                "selected_strategy_id": session.selected_strategy_id,
+                "running_strategies": sorted(session.running_strategies),
+            },
+            "last_successful_reconciliation": (
+                recon.get("last_run_at")
+                if recon.get("healthy") and not recon.get("halted")
+                else None
+            ),
+            "source_of_truth": "backend",
+            "simulated": True,
+        }
+    }
+
+
+@router.post(
+    "/reconciliation/clear-halt",
+    summary="Clear durable reconciliation halt after corrective action",
+)
+async def clear_recon_halt(_: AdminAuthDep) -> dict[str, Any]:
+    from app.services.reconciliation import (
+        clear_reconciliation_halt_persisted,
+        reconciliation_status,
+    )
+
+    await clear_reconciliation_halt_persisted()
+    return {"ok": True, "reconciliation": reconciliation_status()}
+
+
 @router.get("/journal")
 async def journal(pagination: PaginationDep) -> dict[str, Any]:
     export = get_paper_session().journal_export()
@@ -265,37 +406,55 @@ async def journal(pagination: PaginationDep) -> dict[str, Any]:
         "portfolio/journal views. Paper mode only."
     ),
 )
-async def run_cycle(body: PaperCycleBody) -> dict[str, Any]:
+async def run_cycle(body: PaperCycleBody, _: AdminAuthDep) -> dict[str, Any]:
     settings = get_settings()
     if settings.trading_mode != "paper":
         raise LiveTradingDisabledError("Paper cycle requires TRADING_MODE=paper")
     session = get_paper_session()
-    # Share the dashboard paper/risk engines so UI and cycle see one portfolio.
-    from app.execution.gateway import OrderGateway
-
-    key = paper_cycle._session_key(body.symbol, body.strategy_id)
-    orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
-    if orch is None:
-        orch = paper_cycle.get_or_create_orchestrator(
-            symbol=body.symbol,
-            strategy_id=body.strategy_id,
-            settings=settings,
-            paper_engine=session.paper,
+    if session.kill_switch_enabled or settings.kill_switch_enabled:
+        raise HTTPException(
+            status_code=423, detail="Kill switch active — trading blocked"
         )
-    orch.paper = session.paper
-    orch.risk = session.risk_engine
-    orch.gateway = OrderGateway(session.paper, session.risk_engine)
-    orch.kill_switch_enabled = session.kill_switch_enabled
-    orch.settings = settings
+    # Share the dashboard paper/risk engines so UI and cycle see one portfolio.
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    result = await paper_cycle.run_paper_trading_cycle(
-        symbol=body.symbol,
-        timeframe=body.timeframe,
-        correlation_id=body.correlation_id,
-        strategy_id=body.strategy_id,
-        settings=settings,
-        orchestrator=orch,
-    )
+    from app.db.base import create_engine
+    from app.execution.gateway import OrderGateway
+    from app.journal.store import JournalStore
+
+    engine = create_engine()
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as db:
+            journal = JournalStore(db)
+            key = paper_cycle._session_key(body.symbol, body.strategy_id)
+            orch = paper_cycle._CYCLE_ORCHESTRATORS.get(key)
+            if orch is None:
+                orch = paper_cycle.get_or_create_orchestrator(
+                    symbol=body.symbol,
+                    strategy_id=body.strategy_id,
+                    settings=settings,
+                    paper_engine=session.paper,
+                    journal=journal,
+                )
+            orch.paper = session.paper
+            orch.risk = session.risk_engine
+            orch.gateway = OrderGateway(session.paper, session.risk_engine)
+            orch.journal = journal
+            orch.kill_switch_enabled = session.kill_switch_enabled
+            orch.settings = settings
+
+            result = await paper_cycle.run_paper_trading_cycle(
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                correlation_id=body.correlation_id,
+                strategy_id=body.strategy_id,
+                settings=settings,
+                orchestrator=orch,
+                journal=journal,
+            )
+    finally:
+        await engine.dispose()
 
     # Mirror cycle artefacts into the dashboard session views.
     signal = paper_cycle.last_signal()

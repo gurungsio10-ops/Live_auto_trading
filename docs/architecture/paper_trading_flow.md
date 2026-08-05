@@ -24,13 +24,32 @@ Market data (public / offline fixture)
 | `run_paper_trading_cycle(...)` | `app/services/paper_cycle.py` | Single-cycle façade (API + tests) |
 | `TradingOrchestrator.process_candle` | `app/services/trading_orchestrator.py` | Event-driven core |
 | CLI `python -m app.cli paper-run` | `app/cli.py` | Streaming offline/public feed |
-| Dashboard “Run one paper cycle” | Next BFF → `/api/v1/paper/cycle/run` | Shares in-memory paper session |
+| CLI `python -m app.cli paper-soak` | `app/services/paper_soak.py` | Deterministic endurance harness |
+| Dashboard “Run one paper cycle” | Next BFF → `/api/v1/paper/cycle/run` | Shares hydrated paper session |
+| Recovery panel | `frontend/app/recovery` → `/api/v1/recovery/status` | Ops SoT view |
+
+Post-cycle, `app/accounting/invariants.py` checks
+`cash + reserved_cash + marked_position_value = equity` (fail-closed on critical violations).
+
+## Reserved capital (buying power)
+
+- `PaperState.cash` = **available** quote balance (unreserved).
+- `PaperState.reserved_cash` = capital locked for open **BUY** orders (persisted as `paper_accounts.reserved_capital`).
+- On BUY accept: reserve `qty * reference_price` (limit/trigger/mark) from available → reserved.
+- On fill: release proportional reservation back to available, then debit actual fill cost + fee.
+- On cancel / expire / reject / fail: release remaining reservation **exactly once** (idempotent).
+- RiskEngine buying-power checks use available `cash_balance` only (never weakens OrderGateway).
 
 ## Idempotency
 
-- Orders: `idempotency_key` unique in paper engine + risk seen-set.
-- Cycles: `(symbol, strategy_version, timeframe, candle_open_time)` processed at most once per process.
+- Orders: `idempotency_key` unique in paper engine + risk seen-set (persisted).
+- Cycles: `(symbol, strategy_version, timeframe, candle_open_time)` at most once — process set + `system_state` + `processed_cycle_keys`.
 - Strategy fingerprints prevent duplicate action on identical inputs.
+- Restart hydrate restores orders/fills/idempotency from journal or checkpoint.
+
+## Durability
+
+After each accepted cycle the runtime dual-writes `paper_accounts`, `risk_state`, `strategy_state`, equity snapshots, and the legacy checkpoint. See `docs/operations/recovery_runbook.md`.
 
 ## Cost basis
 

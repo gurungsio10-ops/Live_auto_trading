@@ -7,6 +7,7 @@ build/
 .env
 .venv/
 venv/
+.run/
 .pytest_cache/
 .coverage
 htmlcov/
@@ -14,6 +15,7 @@ htmlcov/
 .ruff_cache/
 atlas.db
 *.db
+artifacts/
 node_modules/
 frontend/.next/
 frontend/out/

@@ -24,3 +24,31 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      TRADING_MODE: paper
+      TRADING_ENABLED: "false"
+      ENABLE_LIVE_TRADING: "false"
+      ENABLE_TRADING_SCHEDULER: "false"
+      USE_LIVE_MARKET_DATA: "false"
+      DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlas
+      REDIS_URL: redis://redis:6379/0
+      ADMIN_API_TOKEN: local-dev-admin-token
+      EXCHANGE_NAME: bybit
+      EXCHANGE_TESTNET: "true"
+      STARTING_BALANCE: "10000"
+      DEFAULT_SYMBOL: BTC/USDT
+      DEFAULT_TIMEFRAME: 5m
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"

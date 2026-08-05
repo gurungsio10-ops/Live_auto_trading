@@ -26,6 +26,7 @@
 html,
 body {
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -37,7 +38,25 @@ body {
     linear-gradient(180deg, #0a0f14 0%, var(--bg) 40%, #050709 100%);
   background-attachment: fixed;
   font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Slim dark scrollbars — Bloomberg-dense panels */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 0;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 ::selection {

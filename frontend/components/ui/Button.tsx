@@ -21,7 +21,7 @@ export function Button({
   return (
     <button
       className={[
-        "inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium tracking-wide uppercase transition disabled:opacity-40 disabled:cursor-not-allowed font-mono",
+        "inline-flex min-h-[44px] items-center justify-center gap-2 px-3 py-2 text-xs font-medium tracking-wide uppercase transition disabled:opacity-40 disabled:cursor-not-allowed font-mono",
         variants[variant],
         className,
       ].join(" ")}

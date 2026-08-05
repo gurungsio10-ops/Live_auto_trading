@@ -193,3 +193,77 @@ def test_lookahead_window_length_invariant():
     engine = BacktestEngine(Probe(), BacktestConfig())
     engine.run(candles, write_reports=False)
     assert seen == [1, 2, 3, 4, 5]
+
+
+def test_stop_loss_is_next_bar_not_same_bar():
+    """SL/TP must not fire on the entry bar (optimistic same-bar exit)."""
+
+    class ImmediateStopBuyer(Strategy):
+        strategy_id = "sl_probe"
+        name = "SL Probe"
+        version = "1.0.0"
+
+        def evaluate(self, context: StrategyContext) -> TradeSignal:
+            if context.position is None and len(context.candles) == 1:
+                return TradeSignal(
+                    strategy_name=self.name,
+                    strategy_version=self.version,
+                    symbol="BTC/USDT",
+                    direction=SignalDirection.BUY,
+                    confidence=Decimal("1"),
+                    entry_rationale="enter",
+                    invalidation_condition="n/a",
+                    suggested_stop=Decimal("95"),
+                    suggested_target=Decimal("120"),
+                    input_data_fingerprint="1",
+                )
+            return TradeSignal(
+                strategy_name=self.name,
+                strategy_version=self.version,
+                symbol="BTC/USDT",
+                direction=SignalDirection.HOLD,
+                confidence=Decimal("0"),
+                entry_rationale="hold",
+                invalidation_condition="n/a",
+                input_data_fingerprint=str(len(context.candles)),
+            )
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    # Bar 0: enter at 100, low already below stop — must NOT exit same bar.
+    # Bar 1: low hits stop — exit allowed.
+    candles = [
+        Candle(
+            symbol="BTC/USDT",
+            timeframe="1h",
+            open_time=t0,
+            open=Decimal("100"),
+            high=Decimal("105"),
+            low=Decimal("90"),
+            close=Decimal("100"),
+            volume=Decimal("1"),
+        ),
+        Candle(
+            symbol="BTC/USDT",
+            timeframe="1h",
+            open_time=t0 + timedelta(hours=1),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("90"),
+            close=Decimal("91"),
+            volume=Decimal("1"),
+        ),
+    ]
+    engine = BacktestEngine(
+        ImmediateStopBuyer(),
+        BacktestConfig(
+            fee_rate=Decimal("0"),
+            slippage_rate=Decimal("0"),
+            spread_rate=Decimal("0"),
+            position_size_fraction=Decimal("0.5"),
+        ),
+    )
+    result = engine.run(candles, write_reports=False)
+    assert result.metrics.trade_count == 1
+    trade = result.trades[0]
+    assert trade.reason == "stop-loss"
+    assert trade.exit_time == candles[1].open_time

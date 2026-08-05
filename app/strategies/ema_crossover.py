@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.time import utc_now
-from app.indicators import ema
+from app.indicators import atr, ema, rsi
 from app.models.domain.enums import SignalDirection
 from app.models.domain.trading import TradeSignal
 from app.strategies.base import Strategy, StrategyConfig, StrategyContext
@@ -28,12 +28,21 @@ class EMACrossoverStrategy(Strategy):
 
     strategy_id = "ema_crossover"
     name = "EMA Crossover"
-    version = "1.0.0"
+    version = "1.1.0"
 
     DEFAULT_PARAMS: dict[str, Any] = {
         "fast_ema": 9,
         "slow_ema": 21,
         "warmup_margin": 5,
+        # Optional RSI confirmation (off by default — keeps fixture BUY deterministic).
+        "use_rsi_filter": False,
+        "rsi_period": 14,
+        "rsi_buy_min": 45,
+        # ATR-based stop + fixed reward:risk target on BUY signals.
+        "use_atr_stop": True,
+        "atr_period": 14,
+        "atr_stop_mult": "1.5",
+        "reward_risk": "2",
     }
 
     def default_config(self) -> StrategyConfig:
@@ -132,10 +141,50 @@ class EMACrossoverStrategy(Strategy):
         }
         has_long = context.position is not None and context.position.quantity > 0
 
+        # Optional RSI / ATR snapshots (no look-ahead — closed candles only).
+        rsi_period = int(params.get("rsi_period", 14))
+        atr_period = int(params.get("atr_period", 14))
+        rsi_series = rsi(closes, rsi_period)
+        atr_series = atr(
+            [c.high for c in candles],
+            [c.low for c in candles],
+            closes,
+            atr_period,
+        )
+        rsi_cur = rsi_series[i]
+        atr_cur = atr_series[i]
+        if rsi_cur is not None:
+            indicators["rsi"] = str(rsi_cur)
+        if atr_cur is not None:
+            indicators["atr"] = str(atr_cur)
+
         crossed_up = fast_prev <= slow_prev and fast_cur > slow_cur
         crossed_down = fast_prev >= slow_prev and fast_cur < slow_cur
 
         if crossed_up and not has_long:
+            if bool(params.get("use_rsi_filter")) and rsi_cur is not None:
+                rsi_min = Decimal(str(params.get("rsi_buy_min", 45)))
+                if rsi_cur < rsi_min:
+                    return self._signal(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        direction=SignalDirection.HOLD,
+                        fp=fp,
+                        reason=f"EMA cross up but RSI {rsi_cur} < {rsi_min}",
+                        confidence=Decimal("0.25"),
+                        indicators=indicators,
+                        candle_ts=candle_ts,
+                        calc_ts=calc_ts,
+                    )
+            stop = None
+            target = None
+            if bool(params.get("use_atr_stop")) and atr_cur is not None and atr_cur > 0:
+                mult = Decimal(str(params.get("atr_stop_mult", "1.5")))
+                rr = Decimal(str(params.get("reward_risk", "2")))
+                stop = closes[i] - (atr_cur * mult)
+                target = closes[i] + (atr_cur * mult * rr)
+                indicators["suggested_stop"] = str(stop)
+                indicators["suggested_target"] = str(target)
             return self._signal(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -150,6 +199,8 @@ class EMACrossoverStrategy(Strategy):
                 candle_ts=candle_ts,
                 calc_ts=calc_ts,
                 entry=closes[i],
+                stop=stop,
+                target=target,
             )
 
         if crossed_down and has_long:
@@ -199,6 +250,8 @@ class EMACrossoverStrategy(Strategy):
         candle_ts: Any,
         calc_ts: Any,
         entry: Decimal | None = None,
+        stop: Decimal | None = None,
+        target: Decimal | None = None,
     ) -> TradeSignal:
         return TradeSignal(
             strategy_name=self.name,
@@ -210,6 +263,8 @@ class EMACrossoverStrategy(Strategy):
             entry_rationale=reason,
             invalidation_condition="opposite EMA crossover or risk halt",
             suggested_entry=entry,
+            suggested_stop=stop,
+            suggested_target=target,
             input_data_fingerprint=fp,
             metadata={
                 "timeframe": timeframe,

@@ -38,8 +38,11 @@ jobs:
           # Keep tests on an isolated in-memory DB even if job-level DATABASE_URL is set.
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
         run: |
-          pytest --cov=app.risk --cov=app.execution --cov=app.portfolio --cov=app.strategies \
-            --cov-report=term-missing --cov-fail-under=70
+          # Precision=2 prevents coverage's default integer rounding from treating
+          # 84.x% as 85% while the terminal still prints FAIL (exit stayed 0).
+          pytest --cov=app --cov-report=term-missing --cov-fail-under=85 --cov-precision=2
+          # Hard gate: pytest-cov terminal FAIL must not be masked by teardown noise.
+          python -c "from coverage import Coverage; c=Coverage(); c.load(); t=c.report(show_missing=False); assert t >= 85.0, f'coverage {t:.2f}% < 85%'"
       - name: Alembic upgrade
         env:
           # Fresh file DB dedicated to migration validation (never share with pytest).
@@ -47,6 +50,24 @@ jobs:
         run: |
           rm -f migrate-ci.db
           alembic upgrade head
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
 
   frontend:
     runs-on: ubuntu-latest

@@ -17,20 +17,50 @@ Standard commands are already documented in `README.md` and `frontend/README.md`
 - `.env` is copied from `.env.example`; defaults are paper-safe and require **no secrets** to run. `TRADING_MODE` defaults to `paper` — never weaken this or the live-trading gate (see `.cursor/rules/atlas.mdc`).
 - Database is **SQLite by default** (`sqlite+aiosqlite:///./atlas.db`); **run `alembic upgrade head`** to create tables (includes the `users` table needed for login). `REDIS_URL` is configured but **Redis is not required** — nothing connects to it at startup.
 - **Login is backend-authoritative.** The Next.js middleware still gates routes (unauthenticated pages → `/login`, `/api/*` → `401`), but `frontend/app/api/auth/login` now calls the FastAPI `POST /auth/login`, which verifies against a DB-backed user store with PBKDF2-hashed passwords (`app/auth/`). The backend signs the session token; the middleware verifies it locally, so **`ATLAS_AUTH_SECRET` must match on both sides** (defaults align in dev). Default creds `admin` / `atlas` (override via `ATLAS_DASHBOARD_USER` / `ATLAS_DASHBOARD_PASSWORD`); the admin is seeded on first login. "Remember me" issues a 30-day token/cookie vs 8h default. Because login needs the backend + `users` table, run the backend and `alembic upgrade head` before signing in.
+- **Codespaces auth gotcha:** the browser must call same-origin `/api/auth/login` (already the case). The Next.js server must reach FastAPI at loopback `ATLAS_BACKEND_URL=http://127.0.0.1:8000` — not the public `*-8000.app.github.dev` URL. Bind API with `--host 0.0.0.0`. If login shows “Authentication service unavailable”, the BFF→API hop failed (API down / bad `DATABASE_URL` / migrations). See `docs/operations/codespaces.md` and `scripts/codespaces_start.sh` (auto-started via `.devcontainer/postStartCommand`). Cookie `Secure` is auto-enabled on HTTPS/Codespaces; CORS auto-adds the Codespaces frontend origin when `CODESPACE_NAME` is set.
 
 ### Test / lint
 
 - Backend: `pytest -q`, `ruff check app tests`, `ruff format --check app tests`, `mypy app`, `alembic upgrade head`.
 - Frontend: `npm --prefix frontend run lint`, `npm run typecheck`, `npm run build`. ESLint is configured (`.eslintrc.json`, `eslint@8` + `eslint-config-next@14`).
 - Paper vertical slice API lives under `/api/v1/*`. Mutating kill-switch / paper-reset routes require `ADMIN_API_TOKEN` (`X-Admin-Token` header). Set the same token on the Next.js server for `/api/paper/reset`.
+- **All dashboard mutators** (`/kill-switch`, `/orders`, `/trading/pause`, strategy select/start/stop/params, backtests, legacy `/api/controls/*`) also require `ADMIN_API_TOKEN`. Next.js BFF routes forward it via `adminHeaders()` from `frontend/lib/backend.ts`. Mutating BFFs **fail closed** (HTTP 503) when the backend is down — they must not invent APPROVED orders or kill-switch success.
 - Single-cycle entrypoint: `run_paper_trading_cycle` in `app/services/paper_cycle.py` (EMA crossover 9/21, offline candles by default). Dashboard “Run one paper cycle” proxies to it.
+- `GET /ready` probes the database (`SELECT 1`). LIVE runtime always returns `not_ready`. PAPER and TESTNET can be ready when DB is up.
+- `LiveTradingGate.evaluate()` never returns `allowed=True` in this phase (hard-blocked). Use `checklist_complete` for readiness inspection; include `LIVE_STARTUP_ACK=I_UNDERSTAND_LIVE_TRADING_RISKS` among checklist conditions.
+- Registered strategies: `ema_crossover`, `ema_trend`, `rsi_mean_reversion`, `breakout`.
 
 ### Live dashboard data & the demo fallback
 
 The dashboard is now backed by **live root-level backend endpoints** in `app/api/dashboard.py`, served by an in-memory `app/services/paper_session.py` that wires the real risk engine, paper execution engine, strategy registry and backtesting engine. Portfolio, positions, orders, signals, risk-events, equity-curve, strategies (+ select/start/stop/params), kill-switch, pause, settings, journal export and backtests all return real engine computations, so the yellow "Demo data" banner **no longer appears** in normal operation.
 
 Key behaviours to know:
-- The `PaperSession` is **in-memory and resets when the backend restarts** (fresh $10,000 paper account, no positions).
-- **Every order still routes through the risk engine** (`OrderGateway`) before the paper engine — nothing bypasses risk checks. Reduce-only exits pass a tight protective stop so risk sizing permits a full close (all safety gates still apply).
-- Starting a strategy (`POST /strategies/{id}/start`) runs one paper "tick": it synthesises a deterministic candle series, evaluates the strategy, and if it signals BUY/EXIT places a risk-checked paper order. The market series is engineered so the EMA-trend strategy produces a genuine (non-overbought) entry.
-- The frontend proxy routes **still fall back to demo/mock data** if the backend is genuinely unreachable — so a yellow "Demo data" banner now means the backend is actually down, not a normal state.
+- `PaperSession` is process-local but **hydrated from PostgreSQL/SQLite on startup** (`bootstrap_paper_runtime`): kill switch, trading flags, recon halt, checkpoint + `paper_accounts` / `risk_state` / `strategy_state`, cycle keys, journal (or checkpoint) orders/fills. A restart must not wipe the paper account unless `POST /api/paper/reset` is called with admin auth + `RESET_PAPER_ACCOUNT`.
+- After `alembic upgrade head`, revision **`0006_paper_durable`** must be applied for first-class durable tables. Dual-write keeps legacy `system_state` keys for back-compat.
+- Startup reconciliation is **fail-closed**: exceptions pause trading and persist a halt. Clear with `POST /api/v1/reconciliation/clear-halt` (admin token; not memory-only `clear_reconciliation_halt()`). Status: `GET /api/v1/recovery/status`.
+- `persist_paper_session` stages dual-writes and **commits once**. Cycle persist/recon write failures call `_fail_closed_persistence` (pause + `database_healthy=false` + recon halt) so trading does not continue with divergent memory vs DB.
+- `run_paper_trading_cycle` auto-attaches `JournalStore` when `journal` is omitted **except** for `:memory:` SQLite (pytest isolation). Production/file/Postgres paths get durable order/fill ledger writes.
+- Authoritative consolidation branch is **`release/atlas-paper-v1`** (based on PR **#28** tip, which includes #23–#27). Full PR map: `docs/PR_CONSOLIDATION_AUDIT.md`. Older notes under `docs/audit/` remain historical.
+- Recovery dashboard: `/recovery` (BFF `/api/recovery/*`). Clear-halt needs confirm `CLEAR_RECONCILIATION_HALT` + server-side admin token.
+- Accounting invariants: `app/accounting/invariants.py` (wired after paper cycles; soak writes `artifacts/soak/invariants.json`).
+- Soak harness: `python -m app.cli paper-soak --seed 42` (use `--max-cycles` in CI). No exchange credentials required.
+- Coverage gate is **85%** with **`precision = 2`** (`pyproject.toml` / CI `--cov-precision=2`). Default coverage precision=0 used to round 84.x% → 85 and leave pytest exit 0 while the terminal still printed FAIL — do not remove precision=2 or the hard `coverage.report()` assert in CI. Omits advisory/disabled paths (`app/ai/*`, `app/execution/exchange/*`, `app/api/mvp.py`, `app/cli.py`, `app/news/*`, deprecated `market_data/service.py`).
+- **Every order still routes through the risk engine** (`OrderGateway` → `app/risk/engine.py`) before the paper engine — nothing bypasses risk checks.
+- Canonical cycle path: `run_paper_trading_cycle` with DB cycle locks (`cycle_locks`), journal attachment, post-cycle reconciliation, and fail-closed readiness when reconciliation is unhealthy. See `docs/operations/recovery_runbook.md`.
+- Shared DB pool: use `app.db.base.session_scope` / `get_shared_engine` (not per-request `create_engine().dispose()`). `CYCLE_LOCK_FAIL_CLOSED=true` rejects cycles when the lock layer is unavailable.
+- MarketDataHub (`app/market_data/hub.py`) is the unified observation interface; funding/OI are **advisory only**. Ops SSE: `GET /ops/stream` (proxied by `frontend/app/api/ops/stream`).
+- PortfolioManager (`app/portfolio/manager.py`) wraps PaperSession for period PnL/exposure; leverage remains `1` (spot paper).
+- Advisory AI scoring: `POST /api/ai/score-signal` — never submits orders.
+- Scheduler is **disabled by default** (`ENABLE_TRADING_SCHEDULER=false`). It persists runs, tracks consecutive failures, and auto-pauses after `SCHEDULER_FAILURE_THRESHOLD`.
+- Mutating BFFs **fail closed** (HTTP 503) when the backend/auth is down — they must not invent APPROVED orders or successful cycles. Yellow "Demo data" on GET routes means the backend is unreachable.
+- CORS is restricted via `CORS_ALLOWED_ORIGINS`. Live money remains hard-blocked.
+
+### Performance analytics (paper evaluation)
+
+- Durable closed-trade journal: table `closed_trades` (Alembic `0007_perf_analytics`).
+- APIs under `/analytics/*` and `/api/analytics/*` (overview, performance, trades, strategies, risk, reports, CSV/JSON export).
+- Frontend: `/performance`, `/trades`, `/trades/[id]`, `/reports` (BFF `/api/analytics/[...path]`).
+- Closed trades are recorded on SELL fills via `PaperSession` / `TradingOrchestrator` (idempotent by trade id `ct-{fill_id}`).
+- Continuous paper runner remains `trading_scheduler` (resume/hydrate/idempotent cycles); analytics logging is attached on cycle complete.
+- Release evidence: `docs/release/PAPER_V1_PR_AUDIT.md`, `docs/release/PAPER_V1_ACCEPTANCE_REPORT.md`, harness `scripts/paper_v1_acceptance.py`.
+- Persistence gotcha: `save_paper_checkpoint` must `flush()` after deleting `positions` rows before re-inserting the same symbol (SQLite UNIQUE), or restart dual-write can IntegrityError.

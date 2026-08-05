@@ -19,10 +19,22 @@ from app.strategies.ema_crossover import EMACrossoverStrategy
 
 
 @pytest.fixture(autouse=True)
-def _clean_cycle_state():
+def _clean_cycle_state(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("ENABLE_RECONCILIATION", "false")
+    from app.core.config import get_settings
+    from app.services.paper_session import reset_paper_session
+    from app.services.reconciliation import clear_reconciliation_halt
+
+    get_settings.cache_clear()
     reset_cycle_state()
+    reset_paper_session()
+    clear_reconciliation_halt()
     yield
     reset_cycle_state()
+    reset_paper_session()
+    clear_reconciliation_halt()
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -31,6 +43,8 @@ async def test_cycle_buy_signal_and_idempotent_replay() -> None:
         trading_mode="paper",
         kill_switch_enabled=False,
         paper_starting_balance=Decimal("10000"),
+        database_url="sqlite+aiosqlite:///:memory:",
+        enable_reconciliation=False,
         _env_file=None,
     )
     strategy = EMACrossoverStrategy()

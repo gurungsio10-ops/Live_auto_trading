@@ -1,10 +1,13 @@
 """
-In-memory paper-trading session that wires the real engines together.
+Paper-trading session that wires the real engines together for the dashboard.
 
-This is the live data source behind the dashboard endpoints. Every order still
-flows through ``app/risk/engine.py`` (via ``OrderGateway``) before touching the
-paper execution engine — nothing here bypasses risk checks. State is process-local
-and resets on restart, which is appropriate for a paper/demo session.
+Runtime cache for the paper ledger (`PaperTradingEngine`). Durable source of
+truth is PostgreSQL/SQLite via ``hydrate_paper_session_from_db`` /
+``persist_paper_session`` (Alembic ``0006_paper_durable`` dual-write).
+
+Every order flows through ``OrderGateway`` → ``RiskEngine``. Strategy ticks
+delegate to ``run_paper_trading_cycle`` (canonical orchestration). Live money
+remains hard-blocked.
 """
 
 from __future__ import annotations
@@ -39,7 +42,6 @@ from app.models.domain.trading import (
     TradeSignal,
 )
 from app.risk.engine import RiskContext, RiskEngine, RiskEngineState
-from app.strategies.base import StrategyConfig, StrategyContext
 from app.strategies.registry import get_strategy, list_strategies
 
 # Reference prices used to synthesise a deterministic paper market per symbol.
@@ -59,9 +61,33 @@ _STRATEGY_META: dict[str, dict[str, str]] = {
         ),
         "timeframe": "1m",
     },
+    "ema_rsi": {
+        "governance_status": "PAPER",
+        "description": (
+            "EMA crossover with RSI>50 confirmation and percent stop/target. "
+            "Paper MVP baseline — not marketed as profitable."
+        ),
+        "timeframe": "5m",
+    },
     "ema_trend": {
         "governance_status": "PAPER",
         "description": "Dual EMA crossover with ATR-based stops. Deterministic, no LLM in path.",
+        "timeframe": "1h",
+    },
+    "rsi_mean_reversion": {
+        "governance_status": "PAPER",
+        "description": (
+            "RSI oversold/overbought mean-reversion, long-only. "
+            "Deterministic — not marketed as profitable."
+        ),
+        "timeframe": "1h",
+    },
+    "breakout": {
+        "governance_status": "PAPER",
+        "description": (
+            "Donchian breakout using prior N-bar high/low (excludes current bar). "
+            "Long-only, deterministic."
+        ),
         "timeframe": "1h",
     },
 }
@@ -93,6 +119,7 @@ class PaperSession:
         self.gateway = OrderGateway(self.paper, self.risk_engine)
 
         self.kill_switch_enabled: bool = self.settings.kill_switch_enabled
+        self.trading_enabled: bool = bool(self.settings.trading_enabled)
         self.trading_paused: bool = False
         self.selected_strategy_id: str | None = "ema_crossover"
         self.running_strategies: set[str] = set()
@@ -110,6 +137,9 @@ class PaperSession:
         self.equity_curve: list[dict[str, str]] = []
         self.backtest_reports: list[dict[str, Any]] = []
 
+        self._persist_task: Any = None
+        self.last_hydrated_at: str | None = None
+        self.paper_session_id: str = f"paper-{uuid4().hex[:12]}"
         self._record_equity_point()
 
     # ------------------------------------------------------------------ market
@@ -118,9 +148,15 @@ class PaperSession:
         return _BASE_PRICES.get(symbol, Decimal(100))
 
     def _candles_from_closes(self, symbol: str, closes: list[Decimal]) -> list[Candle]:
+        from datetime import timedelta
+
         timeframe = _STRATEGY_META.get("ema_trend", {}).get("timeframe", "1h")
+        step_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(
+            timeframe, 60
+        )
         candles: list[Candle] = []
-        start = utc_now()
+        # Unique monotonic UTC open times — required by canonical cycle validation.
+        start = utc_now() - timedelta(minutes=step_minutes * max(len(closes), 1))
         n = len(closes)
         for i, close in enumerate(closes):
             close = close.quantize(Decimal("0.01"))
@@ -138,7 +174,7 @@ class PaperSession:
                 Candle(
                     symbol=symbol,
                     timeframe=timeframe,
-                    open_time=start,
+                    open_time=start + timedelta(minutes=step_minutes * i),
                     open=open_,
                     high=hi,
                     low=lo,
@@ -215,7 +251,8 @@ class PaperSession:
         return list(self.paper.state.positions.values())
 
     def _equity(self) -> Decimal:
-        total = self.paper.state.cash
+        # Available + reserved + marked positions (spot paper, 1x).
+        total = self.paper.state.cash + self.paper.state.reserved_cash
         for pos in self._positions():
             total += pos.quantity * pos.current_price
         return total
@@ -231,6 +268,7 @@ class PaperSession:
         unrealized = sum((p.unrealized_pnl for p in self._positions()), Decimal(0))
         daily_pnl = equity - self._daily_start_equity
         return PortfolioState(
+            # cash_balance is *available* buying power (excludes reserved).
             cash_balance=self.paper.state.cash,
             equity=equity,
             realized_pnl=self.paper.state.realized_pnl,
@@ -243,11 +281,17 @@ class PaperSession:
         )
 
     def _risk_context(self, symbol: str) -> RiskContext:
+        from app.services.market_sources import last_market_data_ts
+        from app.services.reconciliation import is_reconciliation_healthy
+
+        md_ts = last_market_data_ts() or utc_now()
+        self.risk_engine.state.last_market_data_ts = md_ts
+        self.risk_engine.state.reconciliation_healthy = is_reconciliation_healthy()
         return RiskContext(
             portfolio=self._portfolio_state(),
             symbol_info=None,
             mark_price=self._mark(symbol),
-            market_data_ts=utc_now(),
+            market_data_ts=md_ts,
             trading_mode=self.settings.trading_mode,
             live_trading_enabled=self.settings.live_trading_enabled,
             kill_switch_enabled=self.kill_switch_enabled,
@@ -306,6 +350,12 @@ class PaperSession:
         )
         context = self._risk_context(symbol)
         realized_before = self.paper.state.realized_pnl
+        position_before = None
+        with self._lock:
+            if side == OrderSide.SELL:
+                pos = self.paper.state.positions.get(symbol)
+                if pos is not None:
+                    position_before = pos.model_copy(deep=True)
 
         try:
             order = await self.gateway.submit(request, context)
@@ -328,9 +378,55 @@ class PaperSession:
                 self._consecutive_losses += 1
             elif realized_delta > 0:
                 self._consecutive_losses = 0
+            await self._record_closed_trades(
+                position_before=position_before,
+                order=order,
+                exit_reason=(
+                    "manual"
+                    if (strategy_name or "manual") == "manual"
+                    else "signal_exit"
+                ),
+            )
 
         self._record_equity_point()
         return order
+
+    async def _record_closed_trades(
+        self,
+        *,
+        position_before: Position | None,
+        order: Order,
+        exit_reason: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Persist round-trip trades for the performance journal (idempotent)."""
+        from app.analytics.recorder import (
+            maybe_build_closed_trade,
+            persist_closed_trades,
+        )
+
+        equity = self._equity()
+        drawdown = (
+            (self._peak_equity - equity) / self._peak_equity
+            if self._peak_equity > 0
+            else Decimal("0")
+        )
+        fills = [f for f in self.paper.state.fills if f.order_id == order.id]
+        trades = maybe_build_closed_trade(
+            position_before=position_before,
+            order=order,
+            fills=fills,
+            fee_rate=self.paper.config.fee_rate,
+            slippage_rate=self.paper.config.slippage_rate,
+            paper_session_id=self.paper_session_id,
+            exit_reason=exit_reason,
+            drawdown=drawdown,
+            consecutive_losses=self._consecutive_losses,
+            kill_switch=self.kill_switch_enabled,
+            correlation_id=correlation_id,
+        )
+        if trades:
+            await persist_closed_trades(trades)
 
     def _synth_rejected_order(
         self, request: OrderRequest, evaluation: RiskEvaluation
@@ -463,6 +559,8 @@ class PaperSession:
             state = self._portfolio_state()
             return {
                 "cash_balance": _q(state.cash_balance),
+                "available_balance": _q(self.paper.state.cash),
+                "reserved_capital": _q(self.paper.state.reserved_cash),
                 "equity": _q(state.equity),
                 "realized_pnl": _q(state.realized_pnl),
                 "unrealized_pnl": _q(state.unrealized_pnl),
@@ -472,7 +570,9 @@ class PaperSession:
                 "open_position_count": len(state.open_positions),
                 "consecutive_losses": state.consecutive_losses,
                 "trading_mode": self.settings.trading_mode,
+                "runtime_mode": self.settings.runtime_mode.value,
                 "kill_switch_enabled": self.kill_switch_enabled,
+                "trading_enabled": self.trading_enabled,
                 "trading_paused": self.trading_paused,
                 "exchange_env": self.settings.exchange_env,
             }
@@ -605,11 +705,126 @@ class PaperSession:
                         "order_id": None,
                     },
                 )
+            # Best-effort durable persist (sync wrapper for async store).
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_kill_switch(session, enabled=enabled)
+                            await store.record_kill_switch_event(
+                                session,
+                                enabled=enabled,
+                                reason=("activated" if enabled else "deactivated"),
+                                payload={"source": "set_kill_switch"},
+                            )
+                            await store.append_audit_event(
+                                session,
+                                event_type="KILL_SWITCH",
+                                message=(
+                                    "Kill switch activated"
+                                    if enabled
+                                    else "Kill switch deactivated"
+                                ),
+                                severity="critical" if enabled else "info",
+                                payload={"enabled": enabled},
+                            )
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
             return {"kill_switch_enabled": enabled}
+
+    def set_trading_enabled(self, enabled: bool) -> dict[str, Any]:
+        """Authoritative paper trading enable/disable (persisted to DB)."""
+        with self._lock:
+            self.trading_enabled = enabled
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_trading_enabled(session, enabled=enabled)
+                            await store.append_audit_event(
+                                session,
+                                event_type="TRADING_ENABLED",
+                                message=(
+                                    "Paper trading enabled"
+                                    if enabled
+                                    else "Paper trading disabled"
+                                ),
+                                payload={"enabled": enabled},
+                            )
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
+            return {
+                "trading_enabled": enabled,
+                "kill_switch_enabled": self.kill_switch_enabled,
+            }
 
     def set_paused(self, paused: bool) -> dict[str, Any]:
         with self._lock:
             self.trading_paused = paused
+            try:
+                import asyncio
+
+                from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+                from app.db.base import create_engine
+                from app.services import paper_persistence as store
+
+                async def _persist() -> None:
+                    engine = create_engine()
+                    factory = async_sessionmaker(
+                        engine, expire_on_commit=False, class_=AsyncSession
+                    )
+                    try:
+                        async with factory() as session:
+                            await store.save_trading_paused(session, paused=paused)
+                    finally:
+                        await engine.dispose()
+
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._persist_task = loop.create_task(_persist())
+                except RuntimeError:
+                    asyncio.run(_persist())
+            except Exception:
+                pass
             return self.portfolio_summary()
 
     # ------------------------------------------------------------------ strategy
@@ -648,60 +863,107 @@ class PaperSession:
             return self._strategy_dict(strategy_id)
 
     async def run_strategy_tick(self, strategy_id: str) -> dict[str, Any]:
-        """Evaluate the strategy on the synthetic market and act on the signal."""
+        """Canonical tick: synthetic candles → ``run_paper_trading_cycle``.
+
+        Dashboard strategy start/tick no longer has a parallel order path.
+        Orders only submit via ``OrderGateway`` inside the shared orchestrator.
+        """
+        from app.execution.gateway import OrderGateway
+        from app.services import paper_cycle
+        from app.services.paper_cycle import ProvidedCandleSource, last_signal
+
         strategy = get_strategy(strategy_id)
         symbol = (self.settings.supported_symbols or ("BTC/USDT",))[0]
+        timeframe = str(
+            _STRATEGY_META.get(strategy_id, {}).get("timeframe")
+            or self.settings.default_timeframe
+        )
 
         with self._lock:
             self._ticks[symbol] = self._ticks.get(symbol, 0) + 3
-            candles = self._live_series(symbol)
+            raw = self._live_series(symbol)
+            candles = [
+                c
+                if c.timeframe == timeframe
+                else c.model_copy(update={"timeframe": timeframe})
+                for c in raw
+            ]
             mark = candles[-1].close
             self.paper.set_mark_price(symbol, mark)
-
             params = self.param_overrides.get(strategy_id) or dict(
                 strategy.default_config().params
             )
-            position = self.paper.state.positions.get(symbol)
-            ctx = StrategyContext(
-                candles=candles,
-                portfolio=self._portfolio_state(),
-                position=position,
-                indicators={"bars_held": 0},
-                config=StrategyConfig(
-                    strategy_id=strategy.strategy_id,
-                    version=strategy.version,
-                    params=params,
-                ),
-            )
-            signal = strategy.evaluate(ctx)
-            signal_id = f"sig_{uuid4().hex[:12]}"
-            self.signal_log.insert(0, self._signal_dict(signal, signal_id))
-            if len(self.signal_log) > 200:
-                self.signal_log = self.signal_log[:200]
 
-        acted: Order | None = None
-        if not self.trading_paused and not self.kill_switch_enabled:
-            if signal.direction == SignalDirection.BUY and position is None:
-                acted = await self._submit(
-                    symbol=symbol,
-                    side=OrderSide.BUY,
-                    order_type=OrderType.MARKET,
-                    quantity=self._suggested_qty(symbol, mark),
-                    stop_loss=signal.suggested_stop,
-                    take_profit=signal.suggested_target,
-                    strategy_name=strategy.name,
-                    signal_id=signal_id,
-                )
-            elif signal.direction == SignalDirection.EXIT and position is not None:
-                acted = await self._close_symbol(symbol, strategy_name=strategy.name)
-        else:
-            # Record the halt as a risk event so the UI reflects why nothing traded.
-            if signal.direction in (SignalDirection.BUY, SignalDirection.EXIT):
-                self.set_kill_switch(self.kill_switch_enabled)
+        orch = paper_cycle.get_or_create_orchestrator(
+            symbol=symbol,
+            strategy_id=strategy_id,
+            settings=self.settings,
+            paper_engine=self.paper,
+        )
+        orch.strategy_params = dict(params)
+        orch.paper = self.paper
+        orch.risk = self.risk_engine
+        orch.gateway = OrderGateway(self.paper, self.risk_engine)
+        orch.kill_switch_enabled = self.kill_switch_enabled
 
+        result = await paper_cycle.run_paper_trading_cycle(
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_id=strategy_id,
+            candle_source=ProvidedCandleSource(candles=candles),
+            orchestrator=orch,
+            settings=self.settings,
+        )
+
+        signal_id = f"sig_{uuid4().hex[:12]}"
+        acted_id: str | None = result.order_id
         with self._lock:
+            sig = last_signal()
+            if sig is not None:
+                self.signal_log.insert(0, self._signal_dict(sig, signal_id))
+                if len(self.signal_log) > 200:
+                    self.signal_log = self.signal_log[:200]
+            elif result.signal_direction:
+                # Ensure UI still shows a decision row on HOLD / gated ticks.
+                self.signal_log.insert(
+                    0,
+                    {
+                        "id": signal_id,
+                        "strategy_name": strategy.name,
+                        "strategy_version": strategy.version,
+                        "symbol": symbol,
+                        "timestamp": utc_now().isoformat(),
+                        "direction": result.signal_direction,
+                        "confidence": "0",
+                        "entry_rationale": result.signal_reason,
+                        "invalidation_condition": "",
+                        "suggested_stop": None,
+                        "suggested_target": None,
+                        "suggested_entry": None,
+                    },
+                )
+            if acted_id:
+                order = self.paper.state.orders.get(acted_id)
+                if order is not None and all(
+                    o.id != order.id for o in self.order_history
+                ):
+                    self.order_history.insert(0, order)
+                    self._log_risk_event(order, requested=order.quantity)
+            elif self.kill_switch_enabled and result.signal_direction in {
+                SignalDirection.BUY.value,
+                SignalDirection.EXIT.value,
+                "buy",
+                "exit",
+            }:
+                self.set_kill_switch(True)
             self._record_equity_point()
-        return {"signal_id": signal_id, "acted": acted.id if acted else None}
+        return {
+            "signal_id": signal_id,
+            "acted": acted_id,
+            "canonical_cycle": True,
+            "correlation_id": result.correlation_id,
+            "idempotent_replay": result.idempotent_replay,
+        }
 
     def _suggested_qty(self, symbol: str, price: Decimal) -> Decimal:
         # Request ~10% of cash; the risk engine will size it down to limits.
@@ -711,6 +973,22 @@ class PaperSession:
         return (notional / price).quantize(Decimal("0.00000001"))
 
     # ------------------------------------------------------------------ manual
+
+    async def _persist_durable_now(self) -> None:
+        """Await atomic dual-write so dashboard fills survive process restart."""
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from app.db.base import create_engine
+
+        engine = create_engine()
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        try:
+            async with factory() as session:
+                await persist_paper_session(session)
+        finally:
+            await engine.dispose()
 
     async def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         symbol = payload["symbol"]
@@ -732,10 +1010,19 @@ class PaperSession:
             ),
             strategy_name=payload.get("strategy_name") or "manual",
         )
+        try:
+            await self._persist_durable_now()
+        except Exception:
+            # Fail closed for new risk decisions — mark DB unhealthy.
+            self.risk_engine.state.database_healthy = False
         return self._order_dict(order)
 
     async def close_position(self, symbol: str) -> list[dict[str, Any]]:
         await self._close_symbol(symbol, strategy_name="manual")
+        try:
+            await self._persist_durable_now()
+        except Exception:
+            self.risk_engine.state.database_healthy = False
         return self.positions()
 
     async def _close_symbol(
@@ -885,3 +1172,365 @@ def reset_paper_session() -> PaperSession:
     global _SESSION
     _SESSION = PaperSession()
     return _SESSION
+
+
+async def hydrate_paper_session_from_db(session: Any) -> PaperSession:
+    """Load durable kill-switch + portfolio + risk/strategy + order/fill ledger."""
+    from app.journal.store import JournalStore
+    from app.services import paper_persistence as store
+    from app.services import reconciliation as recon
+
+    paper = get_paper_session()
+    kill = await store.load_kill_switch(session)
+    if kill is not None:
+        paper.kill_switch_enabled = kill
+    trading_enabled = await store.load_trading_enabled(session)
+    if trading_enabled is not None:
+        paper.trading_enabled = trading_enabled
+    trading_paused = await store.load_trading_paused(session)
+    if trading_paused is not None:
+        paper.trading_paused = trading_paused
+    halt = await store.load_reconciliation_halt(session)
+    if halt is not None:
+        halted = bool(halt.get("halted"))
+        paper.risk_engine.state.reconciliation_healthy = not halted
+        recon.apply_halt_from_storage(halted=halted)
+
+    checkpoint = await store.load_paper_checkpoint(session)
+    account = await store.load_paper_account(session)
+    if checkpoint:
+        cash = Decimal(str(checkpoint.get("cash", paper.paper.state.cash)))
+        paper.paper.state.cash = cash
+        paper.paper.state.reserved_cash = Decimal(
+            str(
+                checkpoint.get("reserved_cash", checkpoint.get("reserved_capital", "0"))
+            )
+        )
+        paper._peak_equity = Decimal(
+            str(checkpoint.get("peak_equity", paper._peak_equity))
+        )
+        if checkpoint.get("daily_start_equity") is not None:
+            paper._daily_start_equity = Decimal(str(checkpoint["daily_start_equity"]))
+        paper._consecutive_losses = int(checkpoint.get("consecutive_losses") or 0)
+        paper.paper.state.realized_pnl = Decimal(
+            str(checkpoint.get("realized_pnl") or "0")
+        )
+        paper.paper.state.positions = store.checkpoint_to_positions(checkpoint)
+        idx = checkpoint.get("idempotency_index") or {}
+        if isinstance(idx, dict):
+            paper.paper.state.idempotency_index = {
+                str(k): str(v) for k, v in idx.items()
+            }
+        for symbol, pos in paper.paper.state.positions.items():
+            paper.paper.set_mark_price(symbol, pos.current_price)
+        paper._record_equity_point()
+    elif account is not None:
+        # First-class account row when checkpoint JSON is absent.
+        paper.paper.state.cash = Decimal(str(account["cash"]))
+        paper.paper.state.reserved_cash = Decimal(
+            str(account.get("reserved_capital") or "0")
+        )
+        paper.paper.state.realized_pnl = Decimal(str(account["realized_pnl"]))
+        paper._peak_equity = Decimal(str(account["peak_equity"]))
+        paper._daily_start_equity = Decimal(str(account["daily_start_equity"]))
+        paper._consecutive_losses = int(account["consecutive_losses"] or 0)
+        idx = account.get("idempotency_index") or {}
+        if isinstance(idx, dict):
+            paper.paper.state.idempotency_index = {
+                str(k): str(v) for k, v in idx.items()
+            }
+        # Restore open positions from the positions table when present.
+        try:
+            from sqlalchemy import select
+
+            from app.models.database.portfolio import PositionORM
+
+            rows = (await session.execute(select(PositionORM))).scalars().all()
+            from app.models.domain.trading import Position
+
+            restored: dict[str, Position] = {}
+            for row in rows:
+                if row.quantity and Decimal(str(row.quantity)) > 0:
+                    restored[row.symbol] = Position(
+                        symbol=row.symbol,
+                        quantity=Decimal(str(row.quantity)),
+                        entry_price=Decimal(str(row.entry_price)),
+                        current_price=Decimal(str(row.current_price)),
+                        unrealized_pnl=Decimal(str(row.unrealized_pnl or 0)),
+                        realized_pnl=Decimal(str(row.realized_pnl or 0)),
+                        opened_at=row.opened_at,
+                        strategy_name=row.strategy_name,
+                    )
+            if restored:
+                paper.paper.state.positions = restored
+                for symbol, pos in restored.items():
+                    paper.paper.set_mark_price(symbol, pos.current_price)
+        except Exception:
+            pass
+        paper._record_equity_point()
+    else:
+        # Legacy fallback: system_state paper_account (+ flags) when 0006 rows absent.
+        legacy = await store.get_system_value(session, "paper_account")
+        flags = await store.get_system_value(session, "paper_session_flags")
+        if legacy and legacy.get("cash") is not None:
+            paper.paper.state.cash = Decimal(str(legacy["cash"]))
+            paper.paper.state.realized_pnl = Decimal(
+                str(legacy.get("realized_pnl") or "0")
+            )
+            if flags:
+                if flags.get("peak_equity") is not None:
+                    paper._peak_equity = Decimal(str(flags["peak_equity"]))
+                if flags.get("daily_start_equity") is not None:
+                    paper._daily_start_equity = Decimal(
+                        str(flags["daily_start_equity"])
+                    )
+                paper._consecutive_losses = int(flags.get("consecutive_losses") or 0)
+                if flags.get("selected_strategy_id"):
+                    paper.selected_strategy_id = str(flags["selected_strategy_id"])
+            paper._record_equity_point()
+
+    risk_state = await store.load_risk_state(session)
+    if risk_state is not None:
+        rs = paper.risk_engine.state
+        rs.circuit_breaker_open = bool(risk_state["circuit_breaker_open"])
+        rs.circuit_breaker_reason = str(risk_state.get("circuit_breaker_reason") or "")
+        rs.seen_idempotency_keys = {
+            str(k) for k in (risk_state.get("seen_idempotency_keys") or [])
+        }
+        rs.reconciliation_healthy = bool(risk_state["reconciliation_healthy"])
+        rs.risk_engine_healthy = bool(risk_state["risk_engine_healthy"])
+        rs.database_healthy = bool(risk_state["database_healthy"])
+        rs.market_data_healthy = bool(risk_state["market_data_healthy"])
+        paper._peak_equity = Decimal(
+            str(risk_state["peak_equity"] or paper._peak_equity)
+        )
+        paper._daily_start_equity = Decimal(
+            str(risk_state["daily_start_equity"] or paper._daily_start_equity)
+        )
+        paper._consecutive_losses = int(
+            risk_state.get("consecutive_losses") or paper._consecutive_losses
+        )
+        if risk_state.get("kill_switch_enabled"):
+            paper.kill_switch_enabled = True
+
+    # Seed risk seen-keys from order idempotency index when risk_state empty.
+    if not paper.risk_engine.state.seen_idempotency_keys:
+        paper.risk_engine.state.seen_idempotency_keys = set(
+            paper.paper.state.idempotency_index.keys()
+        )
+
+    strategy_state = await store.load_strategy_state(session)
+    if strategy_state is not None:
+        paper.selected_strategy_id = strategy_state.get("selected_strategy_id")
+        paper.running_strategies = {
+            str(s) for s in (strategy_state.get("running_strategies") or [])
+        }
+        overrides = strategy_state.get("param_overrides") or {}
+        if isinstance(overrides, dict):
+            paper.param_overrides = {
+                str(k): dict(v) if isinstance(v, dict) else {}
+                for k, v in overrides.items()
+            }
+
+    # Hydrate order/fill ledger from journal tables when present.
+    try:
+        journal = JournalStore(session)
+        orders = await journal.list_orders(limit=500)
+        fills = await journal.list_fills(limit=500)
+        for order in orders:
+            paper.paper.state.orders[order.id] = order
+            paper.paper.state.idempotency_index[order.idempotency_key] = order.id
+            paper.risk_engine.state.seen_idempotency_keys.add(order.idempotency_key)
+            if order not in paper.order_history:
+                paper.order_history.append(order)
+        if fills:
+            paper.paper.state.fills = list(fills)
+    except Exception:
+        # Older DBs without journal tables still boot from checkpoint.
+        pass
+
+    # Fallback: restore fills/orders from checkpoint so restart recon and
+    # idempotency stay coherent when journal rows were never written.
+    if checkpoint:
+        if not paper.paper.state.fills:
+            restored_fills = store.checkpoint_to_fills(checkpoint)
+            if restored_fills:
+                paper.paper.state.fills = list(restored_fills)
+        if not paper.paper.state.orders:
+            restored_orders = store.checkpoint_to_orders(checkpoint)
+            for order_id, order in restored_orders.items():
+                paper.paper.state.orders[order_id] = order
+                paper.paper.state.idempotency_index[order.idempotency_key] = order_id
+                paper.risk_engine.state.seen_idempotency_keys.add(order.idempotency_key)
+                if order not in paper.order_history:
+                    paper.order_history.append(order)
+    from app.core.time import utc_now as _utc_now
+
+    paper.last_hydrated_at = _utc_now().isoformat()
+    return paper
+
+
+async def persist_paper_session(
+    session: Any, *, correlation_id: str | None = None
+) -> None:
+    """Write kill switch + portfolio + risk/strategy durable state atomically.
+
+    Stages all dual-writes in one transaction and commits once. Callers must
+    treat exceptions as fail-closed (do not continue trading with divergent
+    memory vs DB state).
+    """
+    from app.services import paper_persistence as store
+
+    paper = get_paper_session()
+    await store.save_kill_switch(
+        session, enabled=paper.kill_switch_enabled, commit=False
+    )
+    await store.save_trading_enabled(
+        session, enabled=paper.trading_enabled, commit=False
+    )
+    await store.save_trading_paused(session, paused=paper.trading_paused, commit=False)
+    fees = sum((f.fee for f in paper.paper.state.fills), Decimal("0"))
+    equity = (
+        paper.paper.state.cash
+        + paper.paper.state.reserved_cash
+        + sum(
+            (
+                p.quantity * p.current_price
+                for p in paper.paper.state.positions.values()
+            ),
+            Decimal("0"),
+        )
+    )
+    drawdown = (
+        (paper._peak_equity - equity) / paper._peak_equity
+        if paper._peak_equity > 0
+        else Decimal("0")
+    )
+    await store.save_paper_checkpoint(
+        session,
+        cash=paper.paper.state.cash,
+        reserved_cash=paper.paper.state.reserved_cash,
+        positions=dict(paper.paper.state.positions),
+        realized_pnl=paper.paper.state.realized_pnl,
+        peak_equity=paper._peak_equity,
+        consecutive_losses=paper._consecutive_losses,
+        idempotency_index=dict(paper.paper.state.idempotency_index),
+        fees_paid=fees,
+        daily_start_equity=paper._daily_start_equity,
+        correlation_id=correlation_id,
+        fills=list(paper.paper.state.fills),
+        orders=dict(paper.paper.state.orders),
+        commit=False,
+    )
+    await store.save_paper_account(
+        session,
+        cash=paper.paper.state.cash,
+        reserved_capital=paper.paper.state.reserved_cash,
+        realized_pnl=paper.paper.state.realized_pnl,
+        peak_equity=paper._peak_equity,
+        daily_start_equity=paper._daily_start_equity,
+        consecutive_losses=paper._consecutive_losses,
+        fees_paid=fees,
+        idempotency_index=dict(paper.paper.state.idempotency_index),
+        commit=False,
+    )
+    rs = paper.risk_engine.state
+    await store.save_risk_state(
+        session,
+        circuit_breaker_open=rs.circuit_breaker_open,
+        circuit_breaker_reason=rs.circuit_breaker_reason,
+        seen_idempotency_keys=list(rs.seen_idempotency_keys),
+        reconciliation_healthy=rs.reconciliation_healthy,
+        risk_engine_healthy=rs.risk_engine_healthy,
+        database_healthy=rs.database_healthy,
+        market_data_healthy=rs.market_data_healthy,
+        peak_equity=paper._peak_equity,
+        daily_start_equity=paper._daily_start_equity,
+        consecutive_losses=paper._consecutive_losses,
+        kill_switch_enabled=paper.kill_switch_enabled,
+        commit=False,
+    )
+    await store.save_strategy_state(
+        session,
+        selected_strategy_id=paper.selected_strategy_id,
+        running_strategies=list(paper.running_strategies),
+        param_overrides=dict(paper.param_overrides),
+        commit=False,
+    )
+    await store.save_equity_snapshot(
+        session,
+        equity=equity,
+        cash=paper.paper.state.cash,
+        drawdown=drawdown,
+        commit=False,
+    )
+    await session.commit()
+
+
+async def bootstrap_paper_runtime() -> None:
+    """Startup: hydrate durable state and reconcile; fail closed on recon errors."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.core.logging import get_logger
+    from app.db.base import Base, create_engine
+    from app.services import cycle_lock as _cycle_lock_models  # noqa: F401
+    from app.services import paper_cycle
+
+    log = get_logger("paper.bootstrap")
+    engine = create_engine()
+    try:
+        async with engine.begin() as conn:
+            # Dev/sqlite safety: create missing tables if migrations not run yet.
+            # Production should use ``alembic upgrade head``.
+            await conn.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+        async with factory() as session:
+            await hydrate_paper_session_from_db(session)
+            keys = await paper_cycle.load_persisted_cycle_keys(session)
+            paper_cycle.set_processed_cycle_keys(keys)
+        # DB reachable — clear sticky DATABASE_UNHEALTHY from prior crashes.
+        get_paper_session().risk_engine.state.database_healthy = True
+        # Startup reconciliation — fail-closed via risk engine flag.
+        try:
+            from app.services.reconciliation import run_paper_reconciliation
+
+            await run_paper_reconciliation(persist=True)
+        except Exception as exc:
+            paper = get_paper_session()
+            paper.risk_engine.state.reconciliation_healthy = False
+            paper.trading_paused = True
+            from app.services import reconciliation as recon
+
+            recon.apply_halt_from_storage(halted=True)
+            recon._STATE["last_result"] = {
+                "healthy": False,
+                "detail": f"startup reconciliation failed: {type(exc).__name__}",
+            }
+            log.error(
+                "paper_bootstrap_reconciliation_failed",
+                extra={"error": type(exc).__name__},
+            )
+            try:
+                async with factory() as session:
+                    from app.services import paper_persistence as store
+
+                    await store.save_reconciliation_halt(
+                        session,
+                        halted=True,
+                        detail=f"startup reconciliation failed: {type(exc).__name__}",
+                    )
+                    await store.save_trading_paused(session, paused=True)
+            except Exception:
+                log.warning("paper_bootstrap_halt_persist_failed")
+    except Exception:
+        # DB unavailable: keep in-memory session but mark database unhealthy.
+        paper = get_paper_session()
+        paper.risk_engine.state.database_healthy = False
+        log.warning(
+            "paper_bootstrap_failed",
+            extra={"detail": "continuing with in-memory paper session"},
+        )
+    finally:
+        await engine.dispose()

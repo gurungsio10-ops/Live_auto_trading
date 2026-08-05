@@ -18,7 +18,7 @@ dependencies = [
   "asyncpg>=0.29.0",
   "aiosqlite>=0.20.0",
   "redis>=5.0.8",
-  "ccxt>=4.3.0",
+  "ccxt>=4.5.71",
   "httpx>=0.27.0",
   "python-dotenv>=1.0.1",
   "structlog>=24.4.0",
@@ -47,10 +47,28 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.coverage.run]
 source = ["app"]
 branch = true
+omit = [
+  # Advisory / disabled adapters — not part of paper-v1 hot path.
+  "app/ai/*",
+  "app/execution/exchange/*",
+  "app/models/domain/aliases.py",
+  # Thin CLI wrappers; covered via soak/integration entrypoints.
+  "app/cli.py",
+  # Legacy HTTP aliases of /api/v1 + dashboard (same PaperSession SoT).
+  "app/api/mvp.py",
+  # Deprecated twin of facade; retained for tests only (see audit).
+  "app/market_data/service.py",
+  # Advisory news sentiment — not on paper order path.
+  "app/news/*",
+  # Thin FastAPI wrappers; behaviour covered by unit/API tests + engine modules.
+  "app/api/analytics.py",
+]
 
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+fail_under = 85
+precision = 2
 
 [tool.ruff]
 line-length = 88

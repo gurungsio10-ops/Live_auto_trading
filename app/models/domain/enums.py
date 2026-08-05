@@ -20,6 +20,8 @@ class OrderSide(str, Enum):
 class OrderType(str, Enum):
     MARKET = "market"
     LIMIT = "limit"
+    STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
 
 
 class OrderStatus(str, Enum):
@@ -76,6 +78,10 @@ class RiskReasonCode(str, Enum):
     LEVERAGE_NOT_ALLOWED = "LEVERAGE_NOT_ALLOWED"
     UNSUPPORTED_SIDE = "UNSUPPORTED_SIDE"
     INSUFFICIENT_BALANCE = "INSUFFICIENT_BALANCE"
+    ORDER_COOLDOWN = "ORDER_COOLDOWN"
+    STOP_LOSS_REQUIRED = "STOP_LOSS_REQUIRED"
+    MIN_REWARD_RISK = "MIN_REWARD_RISK"
+    DAILY_TRADE_LIMIT = "DAILY_TRADE_LIMIT"
 
 
 # Prompt-aligned alias

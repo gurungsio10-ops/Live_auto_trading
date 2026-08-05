@@ -4,8 +4,24 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.config import get_settings
 from app.models.domain.enums import OrderStatus, RiskDecision, RiskReasonCode
+from app.services import paper_cycle
 from app.services.paper_session import reset_paper_session
+from app.services.reconciliation import clear_reconciliation_halt
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("ENABLE_RECONCILIATION", "false")
+    get_settings.cache_clear()
+    paper_cycle.reset_cycle_state()
+    clear_reconciliation_halt()
+    yield
+    paper_cycle.reset_cycle_state()
+    clear_reconciliation_halt()
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
